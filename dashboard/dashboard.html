@@ -1,0 +1,172 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Open-source Lexia 3 / Diagbox-style diagnostic UI for the Citroen C5 Mk1 FL.
+     Layout mirrors Lexia's working principle: Global Test -> ECU tree ->
+     per-ECU function menu. Served gzipped from the Pico; no external assets. -->
+<div id="app">
+
+  <!-- Supervisor bar (Lexia "Superviseur") -->
+  <header class="superviseur">
+    <div class="brand">
+      <span class="chevrons" aria-hidden="true"><i></i><i></i></span>
+      <span class="brand-name">C5&nbsp;DIAG</span>
+      <span class="brand-sub">open Lexia&nbsp;3</span>
+    </div>
+
+    <div class="vehicle">
+      <span class="veh-model" id="vehModel">Citroën C5 Mk1 FL</span>
+      <span class="veh-vin" id="vehVin">VIN —</span>
+    </div>
+
+    <div class="sup-status">
+      <span class="ind" id="indComms" title="Vehicle communication">
+        <span class="dot"></span><span class="ind-label">Vehicle</span>
+      </span>
+      <span class="ind" id="indLink" title="Server-sent event link">
+        <span class="dot"></span><span class="ind-label">Link</span>
+      </span>
+      <button class="theme-btn" id="themeToggle" title="Toggle light / dark theme" aria-label="Toggle theme">
+        <span class="theme-icon">🌙</span>
+      </button>
+      <button class="btn btn-scan" id="btnGlobalTest" title="Run Global Test (auto-scan every ECU)">
+        Global&nbsp;Test
+      </button>
+    </div>
+  </header>
+
+  <div class="workspace">
+
+    <!-- Left: vehicle info + ECU tree (Lexia Test Global tree) -->
+    <aside class="sidebar" id="sidebar">
+      <div class="side-head">
+        <span>ECUs</span>
+        <button class="mini" id="btnPdi" title="Pre-Delivery Inspection report">PDI</button>
+      </div>
+      <div class="scan-summary" id="scanSummary">No global test run yet.</div>
+      <ul class="ecu-tree" id="ecuTree"><!-- built by JS --></ul>
+      <button class="side-toggle" id="sideToggle" title="Toggle panel">‹</button>
+    </aside>
+
+    <!-- Right: per-ECU function menu + panes -->
+    <main class="content">
+      <div class="ecu-bar">
+        <div class="ecu-title">
+          <span class="ecu-name" id="ecuName">Select an ECU</span>
+          <span class="ecu-meta" id="ecuMeta"></span>
+        </div>
+        <div class="ecu-actions">
+          <input class="pin-input" id="pinInput" maxlength="4" placeholder="PIN" title="SecurityAccess PIN (hex, e.g. B2B2)">
+          <button class="btn ghost" id="btnUnlock" disabled>Unlock</button>
+          <span class="lock" id="lockState" title="Security access state">🔒</span>
+        </div>
+      </div>
+
+      <nav class="func-tabs" id="funcTabs">
+        <button class="ftab active" data-fn="ident">Identification</button>
+        <button class="ftab" data-fn="faults">Faults</button>
+        <button class="ftab" data-fn="meas">Measurements</button>
+        <button class="ftab" data-fn="actuators">Actuator tests</button>
+        <button class="ftab" data-fn="config">Telecoding</button>
+        <button class="ftab" data-fn="flash">Programming</button>
+      </nav>
+
+      <section class="panes">
+        <!-- Identification -->
+        <div class="pane active" data-pane="ident">
+          <div class="pane-toolbar">
+            <button class="btn" id="btnIdent" disabled>Read identification</button>
+          </div>
+          <table class="kv" id="identTable">
+            <tbody><tr><td class="muted" colspan="2">Connect an ECU, then read its identification.</td></tr></tbody>
+          </table>
+        </div>
+
+        <!-- Faults (read / clear DTCs) -->
+        <div class="pane" data-pane="faults">
+          <div class="pane-toolbar">
+            <button class="btn" id="btnReadDtc" disabled>Read faults</button>
+            <button class="btn danger" id="btnClearDtc" disabled>Clear faults</button>
+            <span class="count" id="dtcCount"></span>
+          </div>
+          <table class="grid" id="dtcTable">
+            <thead><tr><th>Code</th><th>Description</th><th>Status</th></tr></thead>
+            <tbody id="dtcBody"><tr><td class="muted" colspan="3">No faults read.</td></tr></tbody>
+          </table>
+        </div>
+
+        <!-- Measurements (live parameters) -->
+        <div class="pane" data-pane="meas">
+          <div class="pane-toolbar">
+            <select class="sel" id="measSelect" disabled></select>
+            <button class="btn" id="btnMeasStart" disabled>Start</button>
+            <button class="btn ghost" id="btnMeasStop" disabled>Pause</button>
+            <span class="hint">The device polls one parameter at a time.</span>
+          </div>
+          <div class="meas-live">
+            <div class="meas-card">
+              <div class="meas-name" id="measName">—</div>
+              <div class="meas-value"><span id="measValue">—</span> <span class="meas-unit" id="measUnit"></span></div>
+              <canvas id="measSpark" width="520" height="90"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Actuator tests -->
+        <div class="pane" data-pane="actuators">
+          <div class="pane-toolbar">
+            <span class="hint">⚠︎ Verify safety conditions before activating an actuator.</span>
+          </div>
+          <ul class="act-list" id="actList"><li class="muted">Connect an ECU.</li></ul>
+        </div>
+
+        <!-- Telecoding / configuration -->
+        <div class="pane" data-pane="config">
+          <div class="pane-toolbar">
+            <button class="btn" id="btnCfgReadAll" disabled>Read configuration</button>
+            <span class="hint">Save the current values before any write — there is no undo.</span>
+          </div>
+          <table class="grid" id="cfgTable">
+            <thead><tr><th>Parameter</th><th>Zone</th><th>Value</th><th></th></tr></thead>
+            <tbody id="cfgBody"><tr><td class="muted" colspan="4">No configuration loaded.</td></tr></tbody>
+          </table>
+        </div>
+
+        <!-- Programming / flashing -->
+        <div class="pane" data-pane="flash">
+          <div class="warn-box">
+            <strong>ECU programming</strong> — high-risk operation. The ECU must be unlocked.
+            A power loss during writing can permanently brick it.
+          </div>
+          <div class="pane-toolbar">
+            <button class="btn" id="btnFlashBegin" disabled>flash begin</button>
+            <button class="btn" id="btnFlashEnd" disabled>flash end</button>
+            <button class="btn ghost" id="btnFlashStatus" disabled>Status</button>
+            <button class="btn danger" id="btnFlashCancel" disabled>Cancel</button>
+          </div>
+          <textarea class="srec" id="srecInput" placeholder="Paste S-record lines here (S1/S2/S3…)" disabled></textarea>
+          <button class="btn" id="btnFlashSend" disabled>Load S-records</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Console drawer (SSE stream + free command entry) -->
+  <section class="console" id="console">
+    <div class="console-head">
+      <span>Console</span>
+      <div class="console-tools">
+        <label class="chk"><input type="checkbox" id="chkAutoscroll" checked> auto-scroll</label>
+        <button class="mini" id="btnClearLog">Clear</button>
+        <button class="mini" id="btnConsoleToggle">▾</button>
+      </div>
+    </div>
+    <div class="console-out" id="consoleOut"></div>
+    <div class="console-in">
+      <span class="prompt">›</span>
+      <input id="consoleInput" placeholder="Direct command (e.g. read F190) — Enter to send" autocomplete="off">
+    </div>
+  </section>
+</div>
+
+<link rel="stylesheet" href="dashboard.css">
+<script src="dashboard.js"></script>
