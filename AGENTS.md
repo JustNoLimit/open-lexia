@@ -70,8 +70,9 @@ Hedef: Lexia 3'ün tüm menü işlevlerini (global test, DTC okuma/silme, parame
 
 ```
 dashboard/dashboard.html, dashboard.css, dashboard.js  <- EDITLENEN arayüz (gömülü)
-dashboard/index.html, script.js, style.css            <- ESKİ v1 kalıntısı, KULLANILMIYOR (silinebilir)
-docs/psa_can_reference.md                              <- PSA CAN protokol referansı (tek referans dokümanı)
+docs/psa_can_reference.md                              <- PSA CAN protokol referansı (ana teknik referans)
+docs/lexia3_menu_reference.md                          <- Lexia 3 menü/parametre referansı (video analizinden)
+docs/ECU_KEYS.md                                       <- ludwig-v gerçek tedarikçi güvenlik PIN veritabanı
 include/psa/
   psa_protocol.hpp   <- kEcuTable (24 ECU), readZone/writeZoneHeader, findEcuIdentification
   ecu_params.hpp     <- 24 ECU için config/meas/actuator veritabanı (OTORİTE kaynak)
@@ -161,7 +162,7 @@ Telecoding sekmesi ham-hex `prompt`'tan **Lexia-tarzı gerçek ayar menüsüne**
 - ~~**Host test derlenmiyor**~~ → **ÇÖZÜLDÜ (2026-07-18):** PICO_SDK ile ilgisi yoktu; `tests/test_psa.cpp` başındaki derleme komutu eksikti (`diag_shell.cpp`/`flash_engine.cpp` linklenmiyordu → `undefined reference`). Doğru komut: `g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp -o test_psa && ./test_psa`. Artık **tüm testler geçiyor** (host ortamında doğrulandı, PICO_SDK_PATH gerekmiyor).
 - **Ölçüm tek parametre (ÇÖZÜLEMEDİ — mimari kısıt):** backend `live_param_id_` ([diag_shell.hpp](include/psa/diag_shell.hpp)) tek bir alan; grid aynı anda birden fazla kartı canlı güncelleyemez. Çözüm için firmware'de çoklu-param polling state machine gerekir (istek/yanıt döngüsünü ECU başına birden fazla ID için sıralamak) — bu küçük bir yama değil, tasarım kararı gerektirir, kullanıcı onayı olmadan üstlenilmedi.
 - **ECRAN_C / AIDE_STAT adresleri doğrulanamadı (ÇÖZÜLEMEDİ):** `ludwig-v/arduino-psa-diag` ECU_LIST.md'de bu isimler yok; mevcut adresler (0x770:0x670, 0x76E:0x66E) best-effort tahmin. Gerçek araçta CAN sniff ile doğrulanmadan güvenilmemeli — bu proje ortamından (kod/doküman) çözülemez, fiziksel donanım/araç erişimi gerekir.
-- **Çoğu ECU'nun güvenlik PIN'i bilinmiyordu → KISMEN ÇÖZÜLDÜ (2026-07-18):** önceki bir oturumun scratchpad'inde önbelleğe alınmış `ludwig-v/psa-seedkey-algorithm ECU_KEYS.md` bulundu (gerçek tedarikçi PIN veritabanı). `ecu_keys.hpp`'ye eklendi:
+- **Çoğu ECU'nun güvenlik PIN'i bilinmiyordu → KISMEN ÇÖZÜLDÜ (2026-07-18):** gerçek tedarikçi PIN veritabanı (`ludwig-v/psa-seedkey-algorithm` ECU_KEYS.md) artık **`docs/ECU_KEYS.md`'de projeye kalıcı olarak eklendi** (önceden sadece geçici bir oturum scratchpad'indeydi, kayboluyordu). Yeni ECU/model PIN'i eklerken önce buraya bak. `ecu_keys.hpp`'ye eklendi:
   - **Yüksek güven** (isim birebir eşleşti): `AIRBAG=B2DF` (SAC_AUTOLIV), `CPL=EE3E` (CDPL), `ECRAN_C=F6C4` (EMF_C).
   - **En iyi tahmin** (kaynakta birden fazla model varyantı var, KWP-çağı/C5-Mk1-FL'e en yakını seçildi — `unlock` başarısız olursa zararsız, `pin <hex>` ile ezilebilir): `BOITEVIT=8962` (AL4_AT8), `AMPLHIFI=A7D8` (AMPLI_AUDIO), `DIRECTN=BF62` (DAE), `ABRASR=ABFB` (ESP81), `DSG=AC58` (DSG_UDS, en zayıf tahmin — kaynakta sadece UDS varyantı var).
   - **Hâlâ bilinmiyor (kaynakta karşılığı yok):** CLIM, HDC, SPNEU, AUTORADIO, BML, ADC, MDP_CONDUCT, MDP_PASSAG, PROJECTEURS, AIDE_STAT — bunlar için gerçek üretici sırrı gerekiyor, kod/analizle üretilemez.
@@ -181,7 +182,9 @@ Telecoding sekmesi ham-hex `prompt`'tan **Lexia-tarzı gerçek ayar menüsüne**
   ```
   mkdir -p build && cd build && cmake .. && make
   ```
-- **Host test notu:** `g++ -std=c++17 -DHOST_TEST -Iinclude src/*.cpp` bu shell'de **HATA verir** çünkü `PICO_SDK_PATH`/`CPATH` ayarlı değil (`mcp2515.hpp` size_t, `main.cpp` pico/stdlib.h bulunamıyor). Bu **çevresel**, UI dosyalarıyla ilgisiz; C++ kaynağı değiştirilmedi. SDK yolu ayarlanınca temiz derlenir.
+- **Host test (düzeltildi 2026-07-18):** `src/*.cpp` glob'unu direkt derlemeye çalışma — `main.cpp`/`mcp2515.hpp` gerçekten Pico SDK ister. Ama `tests/test_psa.cpp` PICO SDK **istemiyor**; doğru komut dosyanın başında yazıyor:
+  `g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp -o test_psa && ./test_psa`
+  Bu komut PICO_SDK_PATH gerektirmeden temiz derlenir ve tüm assertion'lar geçer.
 - **JS sözdizimi:** `node --check dashboard/dashboard.js` ile doğrulandı (geçti).
 
 ---
