@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 #include "psa/dashboard_assets.h"
+#include "psa/dhcp_server.hpp"
 
 #ifndef HOST_TEST
 #include "pico/cyw43_arch.h"
@@ -79,6 +80,17 @@ bool WifiServer::init(DiagShell* shell) {
 
     cyw43_arch_enable_ap_mode("Citroen-Diag", "12345678", CYW43_AUTH_WPA2_AES_PSK);
     printf("[WIFI] Access Point \"Citroen-Diag\" started. IP: 192.168.4.1\n");
+
+    // Without this, a joining phone/laptop gets no address (enable_ap_mode only
+    // brings up the AP link) and can't reach the dashboard at 192.168.4.1.
+    ip4_addr_t ap_ip, ap_mask;
+    IP4_ADDR(&ap_ip, 192, 168, 4, 1);
+    IP4_ADDR(&ap_mask, 255, 255, 255, 0);
+    if (DhcpServer::instance().init(ap_ip, ap_mask)) {
+        printf("[WIFI] DHCP server started (pool 192.168.4.2-192.168.4.9).\n");
+    } else {
+        printf("[WIFI] Warning: DHCP server failed to start; clients may need a static IP.\n");
+    }
 
     // Create listening PCB on port 80
     server_pcb_ = tcp_new_ip_type(IPADDR_TYPE_ANY);

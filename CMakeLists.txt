@@ -36,6 +36,7 @@ add_executable(citroen_can_interface
     src/diag_shell.cpp
     src/flash_engine.cpp
     src/wifi_server.cpp
+    src/dhcp_server.cpp
 )
 target_include_directories(citroen_can_interface PRIVATE include)
 target_link_libraries(citroen_can_interface
