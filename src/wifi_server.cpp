@@ -196,11 +196,11 @@ void WifiServer::handleHttpRequest(struct tcp_pcb* tpcb, const char* req) {
             "Content-Length: %zu\r\n"
             "Connection: close\r\n\r\n",
             assets::kHtmlCompLen);
-        
+
         tcp_write(tpcb, header, header_len, TCP_WRITE_FLAG_COPY);
         tcp_write(tpcb, assets::kHtmlData, assets::kHtmlCompLen, 0);
         tcp_output(tpcb);
-    } 
+    }
     else if (std::strncmp(req, "GET /dashboard.css", 18) == 0) {
         char header[256];
         int header_len = std::snprintf(header, sizeof(header),
@@ -210,11 +210,11 @@ void WifiServer::handleHttpRequest(struct tcp_pcb* tpcb, const char* req) {
             "Content-Length: %zu\r\n"
             "Connection: close\r\n\r\n",
             assets::kCssCompLen);
-        
+
         tcp_write(tpcb, header, header_len, TCP_WRITE_FLAG_COPY);
         tcp_write(tpcb, assets::kCssData, assets::kCssCompLen, 0);
         tcp_output(tpcb);
-    } 
+    }
     else if (std::strncmp(req, "GET /dashboard.js", 17) == 0) {
         char header[256];
         int header_len = std::snprintf(header, sizeof(header),
@@ -224,7 +224,7 @@ void WifiServer::handleHttpRequest(struct tcp_pcb* tpcb, const char* req) {
             "Content-Length: %zu\r\n"
             "Connection: close\r\n\r\n",
             assets::kJsCompLen);
-        
+
         tcp_write(tpcb, header, header_len, TCP_WRITE_FLAG_COPY);
         tcp_write(tpcb, assets::kJsData, assets::kJsCompLen, 0);
         tcp_output(tpcb);

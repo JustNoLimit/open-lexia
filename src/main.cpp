@@ -86,11 +86,17 @@ int main() {
     psa::DualCanPins pins;
     psa::CanManager can;
     // Set listen_only to false to enable transmission for active diagnostics
-    if (!can.init(pins, /*listen_only=*/false)) {
-        printf("CAN init failed\n");
-        return 1;
+    bool can_ok = can.init(pins, /*listen_only=*/false);
+    if (!can_ok) {
+        // Don't halt: returning from main() hits the SDK's default _exit(),
+        // which spins on __breakpoint() with no debugger attached — that wedges
+        // the chip badly enough to also kill USB enumeration. A diagnostic tool
+        // with dead CAN hardware should still boot Wi-Fi/USB so the failure is
+        // visible and the ECU functions remain reachable once wiring is fixed.
+        printf("CAN init failed (no MCP2515 response) - continuing without CAN.\n");
+    } else {
+        printf("Citroen C5 interface up. HS=500k spi0, LS=125k spi1.\n");
     }
-    printf("Citroen C5 interface up. HS=500k spi0, LS=125k spi1.\n");
 
     psa::DiagShell shell;
     shell.init(&can);

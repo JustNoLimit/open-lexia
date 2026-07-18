@@ -13,8 +13,15 @@
 // this project only uses the raw callback API (tcp.h / pbuf.h), not sockets
 #define MEM_LIBC_MALLOC             0
 #define MEM_ALIGNMENT               4
-#define MEM_SIZE                    4000
-#define MEMP_NUM_TCP_SEG            32
+// lwIP's internal heap (tcp_seg/pbuf metadata for every queued write, plus
+// TCP_WRITE_FLAG_COPY header copies) comes out of this, not TCP_SND_BUF —
+// 4000 was too small once dashboard.js needed ~13 segments per write and
+// starved later requests before earlier connections' memory was freed.
+// RP2350 has 520KB SRAM; generous headroom here costs nothing meaningful.
+#define MEM_SIZE                    32000
+// Must be >= TCP_SND_QUEUELEN below (lwIP enforces this at compile time) —
+// TCP_SND_QUEUELEN is ~65 at TCP_SND_BUF=16*TCP_MSS, so this needs headroom above that.
+#define MEMP_NUM_TCP_SEG            68
 #define MEMP_NUM_ARP_QUEUE          10
 #define PBUF_POOL_SIZE              24
 
@@ -25,7 +32,11 @@
 
 #define TCP_MSS                     1460
 #define TCP_WND                     (8 * TCP_MSS)
-#define TCP_SND_BUF                 (8 * TCP_MSS)
+// Must exceed the largest gzipped dashboard asset (dashboard.js, ~18KB) — the
+// server writes each asset in one tcp_write() call with no tcp_sent-driven
+// resend, so anything bigger than TCP_SND_BUF silently fails to queue.
+// ponytail: fixed headroom over today's JS size, bump again if dashboard.js grows past it.
+#define TCP_SND_BUF                 (16 * TCP_MSS)
 #define TCP_SND_QUEUELEN            ((4 * (TCP_SND_BUF) + (TCP_MSS - 1)) / (TCP_MSS))
 
 #define LWIP_NETIF_STATUS_CALLBACK  1

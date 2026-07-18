@@ -45,14 +45,9 @@ button:disabled { opacity:.4; cursor:not-allowed; }
   display:inline-flex; align-items:center; justify-content:center;
 }
 .theme-btn:hover { border-color:var(--accent); }
-.brand { display:flex; align-items:baseline; gap:8px; }
-.chevrons { display:inline-flex; flex-direction:column; gap:2px; margin-right:2px; transform:translateY(2px); }
-.chevrons i {
-  width:16px; height:5px; background:var(--brand); display:block;
-  clip-path:polygon(0 0,100% 0,50% 100%);
-}
+.brand { display:flex; align-items:center; gap:8px; }
+.chevrons { color:var(--brand); flex:0 0 auto; }
 .brand-name { font-weight:700; letter-spacing:.14em; font-size:16px; }
-.brand-sub { font-size:11px; color:var(--muted); letter-spacing:.06em; }
 .vehicle { display:flex; flex-direction:column; line-height:1.15; }
 .veh-model { font-weight:600; }
 .veh-vin { font-size:11px; color:var(--muted); font-family:var(--mono); }
