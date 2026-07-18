@@ -1,6 +1,6 @@
 // Host self-check for the pure protocol logic. No Pico SDK, no hardware.
 // Compile and run:
-//   g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp -o test_psa && ./test_psa
+//   g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp -o test_psa && ./test_psa
 //   (clang++ works too). Returns 0 on success, non-zero on the first failed assert.
 //
 // Covers the two pieces of non-trivial logic in the project:

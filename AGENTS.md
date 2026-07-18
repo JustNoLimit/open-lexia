@@ -157,10 +157,16 @@ Telecoding sekmesi ham-hex `prompt`'tan **Lexia-tarzı gerçek ayar menüsüne**
 ## 6. Bilinen Eksiklikler / Sonraki Adımlar
 
 - ~~**Config "Current value" gösterilmiyor**~~ → **ÇÖZÜLDÜ** (bkz. §0b, yeni telekodlama editörü).
-- **DTC/Config sekmeleri otomatik connect yapmıyor:** `dtc`/`clear` bağlı ECU'yu kullanır; kullanıcı önce Connect etmeli. İyileştirme: butonlara otomatik connect eklenebilir.
-- **Ölçüm tek parametre:** backend `live_param_id_` tek olduğunu poll eder; grid aynı anda birden fazla kartı güncelleyemez (seçili olan güncellenir). Bu backend sınırı.
-- **Kalan eski v1 dosyalar:** `dashboard/index.html`, `dashboard/script.js`, `dashboard/style.css` KULLANILMIYOR — silinebilir (karışıklık yaratmasın).
-- **Lexia 3 referansı:** `lexia3_menu_reference.md` diye bir dosya YOK; tek referans `docs/psa_can_reference.md`.
+- ~~**DTC/Config sekmeleri otomatik connect yapmıyor**~~ → **YANLIŞ ALARM, doğrulandı (2026-07-18):** `selectEcu()` zaten `cmdSeq("exit","connect "+id)` gönderiyor; `setConnected(false/true)` SSE'deki `"Session open with X. Ready"` satırına bağlı olarak `btnReadDtc`/`btnClearDtc`/`btnCfgReadAll` vb. butonları doğru şekilde disable/enable ediyor ([dashboard.js:984](dashboard/dashboard.js#L984), [:1000](dashboard/dashboard.js#L1000)). Not: ham konsoldan elle `dtc` yazan kullanıcı hâlâ önce `connect` yazmalı — bu beklenen davranış.
+- ~~**Host test derlenmiyor**~~ → **ÇÖZÜLDÜ (2026-07-18):** PICO_SDK ile ilgisi yoktu; `tests/test_psa.cpp` başındaki derleme komutu eksikti (`diag_shell.cpp`/`flash_engine.cpp` linklenmiyordu → `undefined reference`). Doğru komut: `g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp -o test_psa && ./test_psa`. Artık **tüm testler geçiyor** (host ortamında doğrulandı, PICO_SDK_PATH gerekmiyor).
+- **Ölçüm tek parametre (ÇÖZÜLEMEDİ — mimari kısıt):** backend `live_param_id_` ([diag_shell.hpp](include/psa/diag_shell.hpp)) tek bir alan; grid aynı anda birden fazla kartı canlı güncelleyemez. Çözüm için firmware'de çoklu-param polling state machine gerekir (istek/yanıt döngüsünü ECU başına birden fazla ID için sıralamak) — bu küçük bir yama değil, tasarım kararı gerektirir, kullanıcı onayı olmadan üstlenilmedi.
+- **ECRAN_C / AIDE_STAT adresleri doğrulanamadı (ÇÖZÜLEMEDİ):** `ludwig-v/arduino-psa-diag` ECU_LIST.md'de bu isimler yok; mevcut adresler (0x770:0x670, 0x76E:0x66E) best-effort tahmin. Gerçek araçta CAN sniff ile doğrulanmadan güvenilmemeli — bu proje ortamından (kod/doküman) çözülemez, fiziksel donanım/araç erişimi gerekir.
+- **Çoğu ECU'nun güvenlik PIN'i bilinmiyordu → KISMEN ÇÖZÜLDÜ (2026-07-18):** önceki bir oturumun scratchpad'inde önbelleğe alınmış `ludwig-v/psa-seedkey-algorithm ECU_KEYS.md` bulundu (gerçek tedarikçi PIN veritabanı). `ecu_keys.hpp`'ye eklendi:
+  - **Yüksek güven** (isim birebir eşleşti): `AIRBAG=B2DF` (SAC_AUTOLIV), `CPL=EE3E` (CDPL), `ECRAN_C=F6C4` (EMF_C).
+  - **En iyi tahmin** (kaynakta birden fazla model varyantı var, KWP-çağı/C5-Mk1-FL'e en yakını seçildi — `unlock` başarısız olursa zararsız, `pin <hex>` ile ezilebilir): `BOITEVIT=8962` (AL4_AT8), `AMPLHIFI=A7D8` (AMPLI_AUDIO), `DIRECTN=BF62` (DAE), `ABRASR=ABFB` (ESP81), `DSG=AC58` (DSG_UDS, en zayıf tahmin — kaynakta sadece UDS varyantı var).
+  - **Hâlâ bilinmiyor (kaynakta karşılığı yok):** CLIM, HDC, SPNEU, AUTORADIO, BML, ADC, MDP_CONDUCT, MDP_PASSAG, PROJECTEURS, AIDE_STAT — bunlar için gerçek üretici sırrı gerekiyor, kod/analizle üretilemez.
+- **Kalan eski v1 dosyalar:** doğrulandı — `dashboard/index.html`, `dashboard/script.js`, `dashboard/style.css` artık **mevcut değil** (önceki oturumda silinmiş), bu madde geçersiz.
+- **Lexia 3 referansı:** `docs/lexia3_menu_reference.md` artık VAR (2026-07-18'de eklendi, kaynak: Lexia 3 Part I/II/III video analizi, C5 3.0L V6 test aracı VIN VF7RCXFUJ6L502935). İçeriği `ecu_zones.hpp`/`ecu_params.hpp`'deki BSI Configuration + Customer Options + AUTORADIO Config parametreleriyle bit-bit örtüşüyor — muhtemelen bu tabloların orijinal kaynağı. İkinci referans: `docs/psa_can_reference.md`.
 
 ---
 

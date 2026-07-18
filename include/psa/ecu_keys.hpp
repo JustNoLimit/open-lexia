@@ -38,6 +38,21 @@ inline uint16_t getEcuPin(const char* family) {
     // Telematic / nav — NAC head unit.
     if (equals(family, "TELEMAT")) return 0xD91C;
 
+    // Below: added 2026-07-18 from ludwig-v/psa-seedkey-algorithm ECU_KEYS.md.
+    // High confidence (exact model-name match to the family in this project):
+    if (equals(family, "AIRBAG")) return 0xB2DF;   // SAC_AUTOLIV
+    if (equals(family, "CPL")) return 0xEE3E;      // CDPL (rain/light sensor)
+    if (equals(family, "ECRAN_C")) return 0xF6C4;  // EMF_C
+
+    // Best-effort guess (source lists several model variants per family; picked
+    // the one matching this project's KWP2000/C5-Mk1-FL era, not the newer UDS
+    // ones). Verify with `pin <hex>` against the real unlock result.
+    if (equals(family, "BOITEVIT")) return 0x8962; // AL4_AT8 (KWP-era AL4 auto gearbox)
+    if (equals(family, "AMPLHIFI")) return 0xA7D8; // AMPLI_AUDIO
+    if (equals(family, "DIRECTN")) return 0xBF62;  // DAE (KWP-era EPS, not *_UDS2 variants)
+    if (equals(family, "ABRASR")) return 0xABFB;   // ESP81 (pre-2010 Bosch ESP, closest to MK60 era)
+    if (equals(family, "DSG")) return 0xAC58;      // DSG_UDS — weakest guess, source only lists a UDS variant
+
     // Everything else: no source-verified family default. Use `pin <hex>`.
     return 0x0000;
 }
