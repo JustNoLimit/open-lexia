@@ -123,12 +123,12 @@
         <div class="pane" data-pane="config">
           <div class="pane-toolbar">
             <button class="btn" id="btnCfgReadAll" disabled>Read configuration</button>
-            <span class="hint">Save the current values before any write — there is no undo.</span>
+            <input class="sel cfg-search" id="cfgSearch" placeholder="Filter settings…" disabled>
+            <span class="hint">Pick a value and Apply — the device only rewrites the affected bits. No undo; read first.</span>
           </div>
-          <table class="grid" id="cfgTable">
-            <thead><tr><th>Parameter</th><th>Zone</th><th>Value</th><th></th></tr></thead>
-            <tbody id="cfgBody"><tr><td class="muted" colspan="4">No configuration loaded.</td></tr></tbody>
-          </table>
+          <div class="cfg-editor" id="cfgEditor">
+            <p class="muted">Connect an ECU and press <b>Read configuration</b> to load its settings.</p>
+          </div>
         </div>
 
         <!-- Programming / flashing -->

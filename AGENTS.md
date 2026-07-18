@@ -132,9 +132,31 @@ Bu düzeltmeler **görsel değil, fonksiyonel** ve doğru çalışması zorunlud
 
 ---
 
+## 0b. GÜNCELLEME — Telekodlama editörü (Lexia-tarzı ayar menüsü)
+
+Telecoding sekmesi ham-hex `prompt`'tan **Lexia-tarzı gerçek ayar menüsüne** çevrildi.
+- **Tek generator (birleştirildi):** `scripts/gen_ecu_data.py` artık HEM `ecu_params.hpp`
+  (24 ECU: config/meas/actuator) HEM `ecu_zones.hpp` (BSI telekodlama → `ECU_CONFIG_PARAMS['BMF']`,
+  131 param, cruise control dahil) parse ediyor. `--write` ile dashboard.js'in üretilen bloğunu
+  yerinde günceller (elle yazılmış app kuyruğunu korur), sonra `scripts/generate_assets.py`.
+  Enum'lar dosya-kapsamlı çözülür (`kYesNo` iki dosyada farklı). Ayrık `gen_bsi_params.py` silindi.
+  **Doğrulama:** birleşik generator, çalışan dashboard.js verisini 24 ECU'da **0 fark** ile
+  yeniden üretiyor (semantic diff); tek yenilik BMF config'in dolması.
+- NOT: `scripts/gen_ecu_data.py` zaten mevcuttu — §4/§8'deki "üretici /tmp'de kayboldu" notu
+  yanlıştı; üretici `scripts/` altında ve artık BSI'ı da kapsıyor.
+- **Editör (`dashboard.js`):** parametreler `category`'ye göre gruplanır (submenü), her biri
+  dropdown (enum/bool) veya sayı girişi; **Read configuration** her zone'u **sıralı** okur
+  (`cfgReadNext`/`cfgAdvance` — cihaz tek yanıt işlediği için watchdog'lu, 2 sn), ham byte'ları
+  saklar, decode edip kontrolü doldurur.
+- **Apply = oku-değiştir-yaz:** `bytes[b] = (bytes[b] & ~mask) | (val<<shift & mask)` → sadece
+  ilgili bitler değişir, zone'un diğer byte'ları korunur; ardından otomatik re-read ile onay.
+  Unlock zorunlu. Uçtan uca sahte-cihazla doğrulandı (örn. cruise `0100 B1→BD`).
+- Ham byte'lar için firmware değişmedi: tek-zone `read` zaten ham hex basıyor
+  (`[CONFIG] Zone XXXX:` + hex satırı; BSI-dışı ECU'da `[DIAG] Zone .. (N bytes): hex`).
+
 ## 6. Bilinen Eksiklikler / Sonraki Adımlar
 
-- **Config "Current value" gösterilmiyor:** `read <zone>` yanıtı (`[CONFIG] Zone XXXX:`) ayrıştırılıp `updateConfigDetail` içindeki mevcut değer/bit alanları doldurulmuyor. Sadece metadata + Write butonu var.
+- ~~**Config "Current value" gösterilmiyor**~~ → **ÇÖZÜLDÜ** (bkz. §0b, yeni telekodlama editörü).
 - **DTC/Config sekmeleri otomatik connect yapmıyor:** `dtc`/`clear` bağlı ECU'yu kullanır; kullanıcı önce Connect etmeli. İyileştirme: butonlara otomatik connect eklenebilir.
 - **Ölçüm tek parametre:** backend `live_param_id_` tek olduğunu poll eder; grid aynı anda birden fazla kartı güncelleyemez (seçili olan güncellenir). Bu backend sınırı.
 - **Kalan eski v1 dosyalar:** `dashboard/index.html`, `dashboard/script.js`, `dashboard/style.css` KULLANILMIYOR — silinebilir (karışıklık yaratmasın).

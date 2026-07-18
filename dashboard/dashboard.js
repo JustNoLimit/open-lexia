@@ -1,4 +1,4 @@
-/* Auto-generated from include/psa/ecu_params.hpp — do not edit by hand. */
+/* Auto-generated from include/psa/ecu_params.hpp + ecu_zones.hpp — do not edit by hand. */
 var ECU_CONFIG_PARAMS = { default:{ label:'Configuration', params:[] } };
 var ECU_MEAS_PARAMS   = { default:{ label:'Measurements', params:[] } };
 var ACTUATOR_TESTS    = {};
@@ -6,6 +6,137 @@ var ACTUATOR_TESTS    = {};
 ECU_CONFIG_PARAMS['BMF'] = {
   label:'BMF',
   params:[
+    {name:'Overspeed warning for the Arabian peninsula', zone:0x100, byte:0, mask:0x01, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Passenger seat position memory option', zone:0x100, byte:0, mask:0x02, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Automatic gearbox option', zone:0x100, byte:0, mask:0x04, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'RH drive vehicle', zone:0x100, byte:0, mask:0x08, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Dynamic stability control option (ESP)', zone:0x100, byte:0, mask:0x10, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Variable damping suspension option', zone:0x100, byte:0, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Driving school vehicle option', zone:0x100, byte:0, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Three door vehicle', zone:0x100, byte:0, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Oil temperature sensor option', zone:0x100, byte:1, mask:0x01, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Coolant level sensor option', zone:0x100, byte:1, mask:0x02, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Passenger airbag option', zone:0x100, byte:1, mask:0x04, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Presence of Telematic unit (RT3/RT4)', zone:0x100, byte:1, mask:0x08, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Water in diesel sensor', zone:0x100, byte:1, mask:0x10, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Air pump presence', zone:0x100, byte:1, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Multiplexed ABS option', zone:0x100, byte:1, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Estate vehicle', zone:0x100, byte:1, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of controlled manual gearbox', zone:0x100, byte:2, mask:0x01, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Driver seat memorisation option', zone:0x100, byte:2, mask:0x02, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Presence of a trailer relay unit', zone:0x100, byte:2, mask:0x04, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence and type of cruise control', zone:0x100, byte:2, mask:0x0C, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=No cruise control','1=Cruise control only','2=Speed limiter only','3=Cruise control and speed limitation']},
+    {name:'Type of parking assistance', zone:0x100, byte:2, mask:0x30, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=No parking assistance','1=Rear only (ultrasonic)','2=Front and rear (ultrasonic)','3=360 camera']},
+    {name:'Parking assistance front/rear', zone:0x100, byte:2, mask:0xC0, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Rear only','1=Front and rear','2=Front/rear/side']},
+    {name:'Type of fuel filler cap presence detection', zone:0x100, byte:3, mask:0x01, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=No detection','1=Switch type','2=Resistive type']},
+    {name:'Control of the diesel additive pump', zone:0x100, byte:3, mask:0x06, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not present','1=By the particle filter','2=By the injection ECU']},
+    {name:'Type of alternator', zone:0x100, byte:3, mask:0x18, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Standard alternator','1=Alternator with regulator','2=Smart alternator (Li-ion)','3=Alternator-starter hybrid']},
+    {name:'Engine management ECU compatible with speed limiter', zone:0x100, byte:3, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Overtaking assistance option', zone:0x100, byte:3, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Presence of a secondary electric brake', zone:0x100, byte:3, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Origin of water in fuel information', zone:0x101, byte:0, mask:0x01, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not present','1=Engine management ECU','2=BSI','3=Dedicated sensor']},
+    {name:'Source of oil temperature information', zone:0x101, byte:0, mask:0x06, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not present','1=Engine relay unit','2=Engine management ECU','3=Dedicated sensor']},
+    {name:'Type of seat belt fastening management unit', zone:0x101, byte:0, mask:0x18, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not present','1=Wire','2=Multiplexed']},
+    {name:'Presence of parking assistance button', zone:0x101, byte:0, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of parking assistance warning', zone:0x101, byte:0, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of a RD4 audio system', zone:0x101, byte:0, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Parking assistance with visual information', zone:0x101, byte:1, mask:0x01, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Parking assistance with audible information', zone:0x101, byte:1, mask:0x02, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of function log', zone:0x101, byte:1, mask:0x04, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of warning log', zone:0x101, byte:1, mask:0x08, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of a fuel pump', zone:0x101, byte:1, mask:0x10, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of front passenger detection area', zone:0x101, byte:1, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Presence of welcome function for the driver', zone:0x101, byte:1, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of faulty parking assistance warning', zone:0x101, byte:1, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Activation of seat belt not fastened detection', zone:0x101, byte:2, mask:0x01, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Driver seat belt not fastened detection', zone:0x101, byte:2, mask:0x02, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Front passenger seat belt not fastened detection', zone:0x101, byte:2, mask:0x04, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Front middle passenger seat belt not fastened detection', zone:0x101, byte:2, mask:0x08, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Rear middle passenger seat belt not fastened detection', zone:0x101, byte:2, mask:0x10, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Rear LH passenger seat belt not fastened detection', zone:0x101, byte:2, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Rear RH passenger seat belt not fastened detection', zone:0x101, byte:2, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Display of rear seat belt reminder on door open', zone:0x101, byte:2, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Origin of oil pressure information', zone:0x101, byte:3, mask:0x01, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not present','1=Engine relay unit','2=Engine management ECU']},
+    {name:'Origin of oil level information', zone:0x101, byte:3, mask:0x06, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not present','1=Engine relay unit','2=Engine management ECU','3=Dedicated sensor']},
+    {name:'Customisation menu type', zone:0x101, byte:3, mask:0x08, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Standard user profile','1=Unique user profile','2=Customised user profile']},
+    {name:'Memorizing of faults', zone:0x101, byte:3, mask:0x10, category:'Vehicle Definition', type:'ZT_ENUM', enumVals:['0=Not authorised','1=Authorised','2=Authorised with warning']},
+    {name:'Lane departure warning system option', zone:0x101, byte:3, mask:0x20, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Rear seat position memory unit', zone:0x101, byte:3, mask:0x40, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Display fuel consumption without DPF regen extra', zone:0x101, byte:3, mask:0x80, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Total period before maintenance (months)', zone:0x102, byte:0, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Revolutions before maintenance (millions)', zone:0x102, byte:1, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'First maintenance limit (km) /100', zone:0x102, byte:2, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Maintenance limit (km) /100', zone:0x102, byte:3, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Distance limit for forcing customer mode (km)', zone:0x102, byte:4, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Distance limit for parc to customer mode switch (km)', zone:0x102, byte:5, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Tolerance on speed limitation/cruise setting (kph*10)', zone:0x102, byte:6, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Response time from ECU to BSI for cruise (s*10)', zone:0x102, byte:7, mask:0xFF, category:'Vehicle Definition', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Red LED for Power Steering warning', zone:0x103, byte:0, mask:0x01, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Orange LED for Power Steering warning', zone:0x103, byte:0, mask:0x02, category:'Vehicle Definition', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Multiplexed electric door mirrors with fold in function', zone:0x2100, byte:0, mask:0x01, category:'Customer Options', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of rear wiping in reverse gear', zone:0x2100, byte:0, mask:0x02, category:'Customer Options', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Close windows with high frequency remote control and key', zone:0x2100, byte:0, mask:0x04, category:'Customer Options', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Type of tyre deflation detection', zone:0x2100, byte:0, mask:0x08, category:'Customer Options', type:'ZT_ENUM', enumVals:['0=Not present','1=Indirect (ABS-based) without display of pressures','2=Direct (pressure sensors) with display','3=Indirect with display']},
+    {name:'Type of day running lights', zone:0x2100, byte:0, mask:0x30, category:'Customer Options', type:'ZT_ENUM', enumVals:['0=No daytime lights','1=Dipped beam DRL','2=Dedicated DRL lamps','3=LED DRL','4=Position lamps DRL']},
+    {name:'Driver seat belt not fastened detection', zone:0x2100, byte:0, mask:0x40, category:'Customer Options', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of exterior temperature sensor', zone:0x2300, byte:0, mask:0x01, category:'Heating/AC', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of AC compressor with external control', zone:0x2300, byte:0, mask:0x02, category:'Heating/AC', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of pollutant sensor', zone:0x2300, byte:0, mask:0x04, category:'Heating/AC', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Type of sunshine sensor', zone:0x2300, byte:0, mask:0x08, category:'Heating/AC', type:'ZT_ENUM', enumVals:['0=Not present','1=Single zone sunshine sensor','2=Two zone sunshine sensor']},
+    {name:'Type of air mixing', zone:0x2300, byte:0, mask:0x30, category:'Heating/AC', type:'ZT_ENUM', enumVals:['0=Manual mixing','1=Automatic mixing (single zone)','2=Two zone','3=Tri-zone']},
+    {name:'Type of air distribution', zone:0x2300, byte:0, mask:0xC0, category:'Heating/AC', type:'ZT_ENUM', enumVals:['0=Manual distribution','1=Automatic distribution','2=Two zone']},
+    {name:'Type of additional heating', zone:0x2300, byte:1, mask:0x07, category:'Heating/AC', type:'ZT_ENUM', enumVals:['0=Absent','1=Electric PTC heater','2=Fuel-burning heater','3=Electric + fuel heater']},
+    {name:'AC compressor drive ratio (/100)', zone:0x2300, byte:1, mask:0xF8, category:'Heating/AC', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Presence of a controlled blower motor', zone:0x2300, byte:2, mask:0x01, category:'Heating/AC', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Brightness sensor option', zone:0x2200, byte:0, mask:0x01, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Rain sensor option', zone:0x2200, byte:0, mask:0x02, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Rear screen wiper option', zone:0x2200, byte:0, mask:0x04, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Headlamp washer option', zone:0x2200, byte:0, mask:0x08, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Automatic hazard warning lamps illumination on impact', zone:0x2200, byte:0, mask:0x10, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Front fog lamps presence', zone:0x2200, byte:0, mask:0x20, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Multiplexed electric door mirrors with fold back', zone:0x2200, byte:0, mask:0x40, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Indexed mirrors for reverse gear', zone:0x2200, byte:0, mask:0x80, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of directional headlamps', zone:0x2200, byte:1, mask:0x01, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Type of front lighting', zone:0x2200, byte:1, mask:0x0E, category:'Lighting', type:'ZT_ENUM', enumVals:['0=Halogen','1=Xenon bulbs (HID)','2=LED','3=Matrix LED','4=Laser LED']},
+    {name:'Type of day running lights', zone:0x2200, byte:1, mask:0x70, category:'Lighting', type:'ZT_ENUM', enumVals:['0=No daytime lights','1=Dipped beam DRL','2=Dedicated DRL lamps','3=LED DRL','4=Position lamps DRL']},
+    {name:'Black Panel mode option', zone:0x2200, byte:1, mask:0x80, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Vehicle location using indicators', zone:0x2200, byte:2, mask:0x01, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Illumination of hazard on heavy deceleration', zone:0x2200, byte:2, mask:0x02, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Dipped beam and main beam in same lens unit', zone:0x2200, byte:2, mask:0x04, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of rear wiping in reverse gear', zone:0x2200, byte:2, mask:0x08, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Illumination of hazard when emergency call pressed', zone:0x2200, byte:2, mask:0x10, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Cold climate option', zone:0x2200, byte:2, mask:0x20, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Main beam and fog lamps in same lens unit', zone:0x2200, byte:2, mask:0x40, category:'Lighting', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Stalk with one-touch automatic wiper activation', zone:0x2200, byte:2, mask:0x80, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of LH reversing lamp', zone:0x2200, byte:3, mask:0x01, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Presence of RH reversing lamp', zone:0x2200, byte:3, mask:0x02, category:'Lighting', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Type of interior lamp switch', zone:0x2200, byte:3, mask:0x0C, category:'Lighting', type:'ZT_ENUM', enumVals:['0=Standard switch','1=One-touch switch']},
+    {name:'Locking when driving option', zone:0x2400, byte:0, mask:0x01, category:'Locking', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Mercosur electric window logic', zone:0x2400, byte:0, mask:0x02, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Central closing using HF remote control', zone:0x2400, byte:0, mask:0x04, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Type of locking', zone:0x2400, byte:0, mask:0x0C, category:'Locking', type:'ZT_ENUM', enumVals:['0=Central locking','1=Selective unlocking (driver door first)','2=Deadlocking','3=Selective + deadlocking']},
+    {name:'Two front multiplexed electric windows', zone:0x2400, byte:0, mask:0x10, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Sunroof number / type', zone:0x2400, byte:0, mask:0x60, category:'Locking', type:'ZT_ENUM', enumVals:['0=No sunroof','1=Manual sunroof','2=Electric sunroof','3=Panoramic roof / sunroof']},
+    {name:'Type of child safety', zone:0x2400, byte:0, mask:0x80, category:'Locking', type:'ZT_ENUM', enumVals:['0=Manual child locks','1=Mechanical','2=Electric child locks']},
+    {name:'Automatic relocking', zone:0x2400, byte:1, mask:0x01, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Alarm type', zone:0x2400, byte:1, mask:0x06, category:'Locking', type:'ZT_ENUM', enumVals:['0=No alarm','1=Basic alarm (perimeter)','2=Standard alarm','3=Full alarm (perimeter + volumetric)','4=Alarm with tilt sensor']},
+    {name:'Type of key', zone:0x2400, byte:1, mask:0x18, category:'Locking', type:'ZT_ENUM', enumVals:['0=Standard key','1=Plip key (infrared)','2=Weak current key (RF remote)','3=Hands-free keyless entry']},
+    {name:'Theft-proof mode', zone:0x2400, byte:1, mask:0x20, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'THATCHAM mode activation', zone:0x2400, byte:1, mask:0x40, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Permanent locking of boot option', zone:0x2400, byte:1, mask:0x80, category:'Locking', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Two front electric windows', zone:0x2401, byte:0, mask:0x01, category:'Locking', type:'ZT_BOOL', enumVals:['0=No','1=Yes']},
+    {name:'Opening rear screen option', zone:0x2401, byte:0, mask:0x02, category:'Locking', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Child safety option', zone:0x2401, byte:0, mask:0x04, category:'Locking', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Close windows with remote and key', zone:0x2401, byte:0, mask:0x08, category:'Locking', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Fuel type', zone:0x2500, byte:0, mask:0x07, category:'Fuel/Oil', type:'ZT_ENUM', enumVals:['0=Petrol (unleaded)','1=Diesel','2=LPG','3=Petrol + LPG','4=Electric','5=Hybrid']},
+    {name:'Oil level sensor option', zone:0x2500, byte:0, mask:0x08, category:'Fuel/Oil', type:'ZT_BOOL', enumVals:['0=Absent / Missing','1=Present']},
+    {name:'Tank capacity (litres)', zone:0x2500, byte:1, mask:0xFF, category:'Fuel/Oil', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Fuel sender warning level (litres)', zone:0x2500, byte:2, mask:0xFF, category:'Fuel/Oil', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Oil level measuring condition', zone:0x2500, byte:3, mask:0x03, category:'Fuel/Oil', type:'ZT_ENUM', enumVals:['0=Not measured','1=Engine off','2=Measured at ignition on','3=Measured periodically','4=Measured on request only']},
+    {name:'Fuel sender resistance at full (ohms)', zone:0x2501, byte:0, mask:0xFF, category:'Fuel/Oil', type:'ZT_NUMERIC', enumVals:null},
+    {name:'Fuel sender law - vehicle selection', zone:0x2501, byte:1, mask:0x07, category:'Fuel/Oil', type:'ZT_ENUM', enumVals:['0=Not present','1=Diesel engines','2=Petrol engines','3=All engines']},
+    {name:'Dipstick law - engine', zone:0x2501, byte:1, mask:0xF8, category:'Fuel/Oil', type:'ZT_ENUM', enumVals:['0=Not present','1=petrol 1.8L(EW7)','2=petrol 2.0L(EW10)','3=petrol 3.0L(ES9)','4=petrol 3.0L(V6)','5=diesel 1.6L(DV6)','6=diesel 2.0L(DW10)','7=diesel 2.2L(DW12)','8=diesel 2.7L(DT17)','9=diesel 3.0L(DT20)']},
+    {name:'Origin of oil level information', zone:0x2501, byte:2, mask:0x01, category:'Fuel/Oil', type:'ZT_ENUM', enumVals:['0=Not present','1=Engine relay unit','2=Engine management ECU','3=Dedicated sensor']},
   ]
 };
 ECU_MEAS_PARAMS['BMF'] = {
@@ -663,6 +794,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
   {id:'4303', name:'Left Cornering', desc:'Left cornering light activation'},
   {id:'4304', name:'Right Cornering', desc:'Right cornering light activation'},
 ];
+
 /* ---- Open Lexia 3 app logic --------------------------------------------------
  * Drives the Lexia workflow (Global Test -> ECU tree -> per-ECU functions) over
  * the firmware's HTTP contract:
@@ -705,8 +837,11 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
 
   var st = {
     connected: false, ecu: null, unlocked: false, scanning: false,
-    dtcs: [], cfg: [], cfgZone: null, meas: { name: "—", unit: "", hist: [] },
-    identReading: false
+    dtcs: [], meas: { name: "—", unit: "", hist: [] },
+    identReading: false,
+    cfgRaw: {},          // zoneHex -> [byte,...] last read
+    cfgPendingZone: null, // zone whose raw hex line we're expecting
+    cfgReading: false, cfgQueue: null, cfgTimer: null
   };
 
   // ---- theme ----
@@ -829,6 +964,8 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       });
       list.appendChild(li);
     });
+    // Telecoding editor
+    renderCfgEditor(id);
   }
 
   function hx(v) { // normalise a hex id ("0x3101"/"3101"/12345) -> bare hex string
@@ -849,7 +986,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     $("indComms").classList.toggle("on", on);
     var dis = !on;
     ["btnIdent", "btnReadDtc", "btnClearDtc", "btnMeasStart", "btnMeasStop",
-      "btnCfgReadAll", "btnUnlock", "measSelect", "btnFlashStatus", "btnFlashCancel",
+      "btnCfgReadAll", "cfgSearch", "btnUnlock", "measSelect", "btnFlashStatus", "btnFlashCancel",
       "btnFlashEnd", "btnFlashSend"].forEach(function (b) { if ($(b)) $(b).disabled = dis; });
     if (!on) { setLock(false); $("ecuMeta").textContent = "disconnected"; }
   }
@@ -911,10 +1048,16 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     // live measurement
     if ((m = t.match(/^\[LIVE\] (.+): ([-0-9.]+) ?(.*)$/))) { updateMeas(m[1], parseFloat(m[2]), m[3]); return; }
 
-    // config zone read
-    if ((m = t.match(/^\[CONFIG\] Zone ([0-9A-Fa-f]+):/))) { st.cfgZone = m[1].toUpperCase(); return; }
-    if (st.cfgZone && (m = t.match(/^\s{2,}(.+?):\s*(.+)$/)) && !/^\[/.test(t)) {
-      if (!/^Byte \d+/.test(m[1])) { addCfgRow(m[1].trim(), st.cfgZone, m[2].trim()); return; }
+    // config zone read — capture RAW bytes for the telecoding editor
+    if ((m = t.match(/^\[CONFIG\] Zone ([0-9A-Fa-f]+):/))) { st.cfgPendingZone = m[1].toUpperCase(); return; }
+    if (st.cfgPendingZone && (m = t.match(/^\s*((?:[0-9A-Fa-f]{2}\s+)*[0-9A-Fa-f]{2})\s*$/))) {
+      applyCfgRaw(st.cfgPendingZone, m[1]); st.cfgPendingZone = null; return;
+    }
+    // non-BSI ECUs print raw bytes inline: "[DIAG] Zone 2B00 (4 bytes): AB CD .."
+    // capture while reading config, or when re-confirming a zone we've already read.
+    if ((m = t.match(/^\[DIAG\] Zone ([0-9A-Fa-f]+) \(\d+ bytes\):\s*((?:[0-9A-Fa-f]{2}\s*)+)/)) &&
+        (st.cfgReading || st.cfgRaw[m[1].toUpperCase()])) {
+      applyCfgRaw(m[1].toUpperCase(), m[2]); return;
     }
 
     // identification (VIN via Zone F190/80 ASCII)
@@ -937,20 +1080,127 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       return '<tr><td class="code">' + d.code + '</td><td class="muted">fault ' + d.code + '</td><td>' + pill + ' <span class="muted">0x' + d.status + '</span></td></tr>';
     }).join("");
   }
-  function addCfgRow(name, zone, val) {
-    st.cfg.push({ name: name, zone: zone, val: val });
-    var b = $("cfgBody");
-    if (st.cfg.length === 1) b.innerHTML = "";
-    var tr = document.createElement("tr");
-    tr.innerHTML = '<td>' + esc(name) + '</td><td class="code">' + zone + '</td><td>' + esc(val) + '</td>' +
-      '<td><button class="mini" data-zone="' + zone + '">write…</button></td>';
-    tr.querySelector("button").addEventListener("click", function () { writeZonePrompt(zone); });
-    b.appendChild(tr);
+  // ---- Telecoding editor (Lexia-style: menu of named settings, no raw hex) ----
+  function cfgParamsFor(id) {
+    var c = (typeof ECU_CONFIG_PARAMS !== "undefined") && ECU_CONFIG_PARAMS[id];
+    return (c && c.params) || [];
   }
-  function writeZonePrompt(zone) {
-    if (!st.unlocked) { alert("Unlock the ECU before writing (Unlock button)."); return; }
-    var bytes = prompt("Write zone " + zone + " — hex bytes (e.g. 01 02):", "");
-    if (bytes) cmd("write " + zone + " " + bytes.trim());
+  function shiftOf(mask) { var s = 0; if (!mask) return 0; while ((mask & 1) === 0) { mask >>= 1; s++; } return s; }
+  function zoneHex(z) { return (z & 0xFFFF).toString(16).toUpperCase().padStart(z > 0xFF ? 4 : 2, "0"); }
+  function enumLabel(vals, v) {
+    if (!vals) return String(v);
+    for (var i = 0; i < vals.length; i++) { var mm = vals[i].match(/^(\d+)=(.*)$/); if (mm && +mm[1] === v) return vals[i]; }
+    return String(v);
+  }
+  // Build the editor DOM for the selected ECU (controls disabled until Read).
+  function renderCfgEditor(id) {
+    var host = $("cfgEditor"); host.innerHTML = "";
+    var params = cfgParamsFor(id);
+    if (!params.length) {
+      host.innerHTML = '<p class="muted">No telecoding parameters are defined for this ECU.</p>';
+      return;
+    }
+    var groups = {};
+    params.forEach(function (p) { (groups[p.category] || (groups[p.category] = [])).push(p); });
+    Object.keys(groups).forEach(function (cat) {
+      var sec = document.createElement("section"); sec.className = "cfg-group";
+      var h = document.createElement("h4"); h.textContent = cat; sec.appendChild(h);
+      groups[cat].forEach(function (p, i) {
+        var zh = zoneHex(p.zone), sh = shiftOf(p.mask), maxv = p.mask >> sh;
+        var row = document.createElement("div"); row.className = "cfg-row";
+        row.dataset.zone = zh; row.dataset.byte = p.byte; row.dataset.mask = p.mask; row.dataset.shift = sh;
+        row.dataset.filter = (p.name + " " + cat).toLowerCase();
+        var ctrl;
+        if (p.type === "ZT_NUMERIC" || !p.enumVals) {
+          ctrl = document.createElement("input"); ctrl.type = "number"; ctrl.min = 0; ctrl.max = maxv; ctrl.className = "cfg-ctrl";
+        } else {
+          ctrl = document.createElement("select"); ctrl.className = "cfg-ctrl";
+          p.enumVals.forEach(function (v) {
+            var mm = v.match(/^(\d+)=(.*)$/); if (!mm) return;
+            var o = document.createElement("option"); o.value = mm[1]; o.textContent = v; ctrl.appendChild(o);
+          });
+        }
+        ctrl.disabled = true;
+        row.innerHTML =
+          '<div class="cfg-info"><span class="cfg-name">' + esc(p.name) + '</span>' +
+          '<span class="cfg-zone code">zone ' + zh + ' · byte ' + p.byte + ' · mask 0x' + p.mask.toString(16).toUpperCase() + '</span></div>';
+        var right = document.createElement("div"); right.className = "cfg-act";
+        var cur = document.createElement("span"); cur.className = "cfg-cur muted"; cur.textContent = "—";
+        var apply = document.createElement("button"); apply.className = "btn mini"; apply.textContent = "Apply"; apply.disabled = true;
+        apply.addEventListener("click", function () { cfgApply(row, ctrl, p); });
+        right.appendChild(cur); right.appendChild(ctrl); right.appendChild(apply);
+        row.appendChild(right);
+        row._ctrl = ctrl; row._cur = cur; row._apply = apply; row._param = p;
+        sec.appendChild(row);
+      });
+      host.appendChild(sec);
+    });
+    // if this ECU's zones were already read this session, repaint values
+    Object.keys(st.cfgRaw).forEach(function (z) { paintZone(z); });
+  }
+  // Sequential zone reader — the device answers one request at a time, so we
+  // wait for each zone's response (or a watchdog timeout) before the next read.
+  function cfgReadAll() {
+    var params = cfgParamsFor(st.ecu); if (!params.length) return;
+    var zones = []; params.forEach(function (p) { var z = zoneHex(p.zone); if (zones.indexOf(z) < 0) zones.push(z); });
+    st.cfgQueue = zones.slice(); st.cfgReading = true;
+    $("btnCfgReadAll").disabled = true;
+    cfgReadNext();
+  }
+  function cfgReadNext() {
+    clearTimeout(st.cfgTimer);
+    if (!st.cfgQueue || !st.cfgQueue.length) { st.cfgReading = false; $("btnCfgReadAll").disabled = !st.connected; return; }
+    var z = st.cfgQueue[0];
+    cmd("read " + z);
+    st.cfgTimer = setTimeout(function () { cfgAdvance(z); }, 2000); // skip a zone that never answered
+  }
+  function cfgAdvance(z) {
+    if (st.cfgQueue && st.cfgQueue[0] === z) { st.cfgQueue.shift(); cfgReadNext(); }
+  }
+  // Store raw bytes for a zone and refresh every control bound to it.
+  function applyCfgRaw(zh, hexStr) {
+    var bytes = hexStr.trim().split(/\s+/).map(function (h) { return parseInt(h, 16); }).filter(function (n) { return !isNaN(n); });
+    if (!bytes.length) return;
+    st.cfgRaw[zh] = bytes;
+    paintZone(zh);
+    cfgAdvance(zh);
+  }
+  function paintZone(zh) {
+    var raw = st.cfgRaw[zh]; if (!raw) return;
+    Array.prototype.forEach.call($("cfgEditor").querySelectorAll('.cfg-row[data-zone="' + zh + '"]'), function (row) {
+      var byte = +row.dataset.byte, mask = +row.dataset.mask, sh = +row.dataset.shift;
+      if (byte >= raw.length) return;
+      var v = (raw[byte] & mask) >> sh;
+      row._ctrl.disabled = false; row._apply.disabled = false;
+      if (row._ctrl.tagName === "SELECT") row._ctrl.value = String(v); else row._ctrl.value = v;
+      row._cur.textContent = "now: " + enumLabel(row._param.enumVals, v);
+      row._cur.classList.remove("muted");
+    });
+  }
+  // Read-modify-write: rewrite only the masked bits of one byte, keep the rest.
+  function cfgApply(row, ctrl, p) {
+    if (!st.unlocked) { alert("Unlock the ECU first (Unlock button)."); return; }
+    var zh = row.dataset.zone, byte = +row.dataset.byte, mask = +row.dataset.mask, sh = +row.dataset.shift;
+    var raw = st.cfgRaw[zh];
+    if (!raw) { alert("Read the configuration first so the other bytes are preserved."); return; }
+    var v = parseInt(ctrl.value, 10);
+    if (isNaN(v) || v < 0 || v > (mask >> sh)) { alert("Value out of range for this field."); return; }
+    var bytes = raw.slice();
+    bytes[byte] = (bytes[byte] & ~mask & 0xFF) | ((v << sh) & mask);
+    var hex = bytes.map(function (b) { return b.toString(16).toUpperCase().padStart(2, "0"); }).join(" ");
+    if (!confirm('Write "' + p.name + '" = ' + enumLabel(p.enumVals, v) + '?\n\nzone ' + zh + ' ← ' + hex)) return;
+    cmdSeq("write " + zh + " " + hex, "read " + zh); // write then re-read to confirm
+  }
+  function cfgFilter(q) {
+    q = (q || "").trim().toLowerCase();
+    Array.prototype.forEach.call($("cfgEditor").querySelectorAll(".cfg-group"), function (sec) {
+      var any = false;
+      Array.prototype.forEach.call(sec.querySelectorAll(".cfg-row"), function (row) {
+        var hit = !q || row.dataset.filter.indexOf(q) >= 0;
+        row.style.display = hit ? "" : "none"; if (hit) any = true;
+      });
+      sec.style.display = any ? "" : "none";
+    });
   }
   function setIdent(zone, ascii) {
     var t = $("identTable").querySelector("tbody");
@@ -988,8 +1238,9 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     ctx.beginPath(); ctx.moveTo(2, h - 6); ctx.lineTo(w - 2, h - 6); ctx.stroke();
   }
 
-  function resetPanes() { st.dtcs = []; st.cfg = []; st.cfgZone = null; renderDtc();
-    $("cfgBody").innerHTML = '<tr><td class="muted" colspan="4">No configuration loaded.</td></tr>';
+  function resetPanes() { st.dtcs = []; renderDtc();
+    clearTimeout(st.cfgTimer);
+    st.cfgRaw = {}; st.cfgPendingZone = null; st.cfgReading = false; st.cfgQueue = null;
     st.meas.hist = []; $("measValue").textContent = "—"; $("measName").textContent = "—"; $("measUnit").textContent = ""; drawSpark();
     $("identTable").querySelector("tbody").innerHTML = '<tr><td class="muted" colspan="2">Read the identification.</td></tr>';
   }
@@ -1039,9 +1290,8 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     });
     $("btnMeasStop").addEventListener("click", function () { cmd("meas off"); });
 
-    $("btnCfgReadAll").addEventListener("click", function () {
-      st.cfg = []; $("cfgBody").innerHTML = ""; cmd("config readall");
-    });
+    $("btnCfgReadAll").addEventListener("click", cfgReadAll);
+    $("cfgSearch").addEventListener("input", function () { cfgFilter(this.value); });
 
     $("btnFlashBegin").addEventListener("click", function () {
       if (confirm("Start the flash sequence (erase + prepare)?")) cmd("flash begin");

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 # Regenerate the dashboard.js per-ECU data arrays (ECU_CONFIG_PARAMS,
-# ECU_MEAS_PARAMS, ACTUATOR_TESTS) from the C++ authority header
-# include/psa/ecu_params.hpp.  The dashboard.js data is auto-generated
-# and MUST NOT be hand-edited.
+# ECU_MEAS_PARAMS, ACTUATOR_TESTS) from the C++ authority headers:
+#   include/psa/ecu_params.hpp   all ECUs: config/meas/actuator
+#   include/psa/ecu_zones.hpp    BSI telecoding zones -> BMF config
+# The dashboard.js data block is auto-generated and MUST NOT be hand-edited.
 #
-# Usage:  python3 scripts/gen_ecu_data.py
-# Output: prints the JS fragment; redirect into dashboard/dashboard.js
-#         (between the "Auto-generated" marker and the FAMILY_FOR block).
-import os, re
+# Usage:  python3 scripts/gen_ecu_data.py            print the JS block to stdout
+#         python3 scripts/gen_ecu_data.py --write    splice into dashboard.js
+# Then:   python3 scripts/generate_assets.py         re-embed for firmware
+import os, re, sys
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(BASE, "include", "psa", "ecu_params.hpp")
+ZONES = os.path.join(BASE, "include", "psa", "ecu_zones.hpp")
+DASH = os.path.join(BASE, "dashboard", "dashboard.js")
 
 with open(SRC) as f:
     text = f.read()
@@ -46,6 +49,25 @@ for m in re.finditer(r'inline constexpr BsiZoneParam (\w+ConfigParams)\[\] = \{(
         })
     config_arrays[arr_name] = params
 
+# 2b. BMF config = BSI telecoding zones from ecu_zones.hpp.
+#     Its enums are file-scoped (kYesNo differs from ecu_params.hpp), so parse
+#     a separate enum map and collect every BsiZoneParam row in file order.
+with open(ZONES) as f:
+    ztext = f.read()
+zenum_map = {}
+for m in re.finditer(r'inline constexpr const char\* (\w+)\[\] = \{(.*?)\};', ztext, re.DOTALL):
+    zenum_map[m.group(1)] = re.findall(r'"([^"]*)"', m.group(2))
+bmf_config = []
+for m in re.finditer(r'inline constexpr BsiZoneParam (\w+)\[\] = \{(.*?)\};', ztext, re.DOTALL):
+    for r in re.findall(r'\{([^}]*)\}', m.group(2)):
+        p = [x.strip() for x in r.split(',')]
+        enum_tok = p[6] if len(p) > 6 else "nullptr"
+        bmf_config.append({
+            "name": p[3].strip('"'), "zone": hex4(p[0]), "byte": p[1], "mask": p[2],
+            "category": p[4].strip('"'), "type": p[5],
+            "enumVals": zenum_map.get(enum_tok) if enum_tok not in ("nullptr", "null", "NULL") else None,
+        })
+
 # 3. LiveDataParam meas arrays
 meas_arrays = {}
 for m in re.finditer(r'inline constexpr LiveDataParam (\w+MeasParams)\[\] = \{(.*?)\};', text, re.DOTALL):
@@ -77,7 +99,7 @@ def js_str(s):
     return "'" + s.replace("'", "\\'") + "'"
 
 L = []
-L.append("/* Auto-generated from include/psa/ecu_params.hpp — do not edit by hand. */")
+L.append("/* Auto-generated from include/psa/ecu_params.hpp + ecu_zones.hpp — do not edit by hand. */")
 L.append("var ECU_CONFIG_PARAMS = { default:{ label:'Configuration', params:[] } };")
 L.append("var ECU_MEAS_PARAMS   = { default:{ label:'Measurements', params:[] } };")
 L.append("var ACTUATOR_TESTS    = {};")
@@ -85,7 +107,8 @@ for fam, (cfg, meas, act) in families.items():
     L.append("")
     L.append("ECU_CONFIG_PARAMS[%s] = {" % js_str(fam))
     L.append("  label:%s," % js_str(fam)); L.append("  params:[")
-    for p in config_arrays.get(cfg, []) if cfg not in ("nullptr","null","NULL") else []:
+    cfg_list = bmf_config if fam == "BMF" else (config_arrays.get(cfg, []) if cfg not in ("nullptr","null","NULL") else [])
+    for p in cfg_list:
         ev = p["enumVals"]
         ev_js = "null" if ev is None else "[" + ",".join(js_str(v) for v in ev) + "]"
         L.append("    {name:%s, zone:%s, byte:%s, mask:%s, category:%s, type:%s, enumVals:%s},"
@@ -100,4 +123,18 @@ for fam, (cfg, meas, act) in families.items():
     for t in act_arrays.get(act, []) if act not in ("nullptr","null","NULL") else []:
         L.append("  {id:%s, name:%s, desc:%s}," % (js_str(t["id"]), js_str(t["name"]), js_str(t["desc"])))
     L.append("];")
-print("\n".join(L))
+
+block = "\n".join(L)
+
+if "--write" in sys.argv:
+    # Replace the generated region, preserving the hand-written app tail that
+    # begins at the "Open Lexia 3 app logic" comment.
+    with open(DASH) as f:
+        js = f.read()
+    marker = "/* ---- Open Lexia 3 app logic"
+    idx = js.index(marker)
+    with open(DASH, "w") as f:
+        f.write(block + "\n\n" + js[idx:])
+    sys.stderr.write("wrote generated block into %s\n" % DASH)
+else:
+    print(block)

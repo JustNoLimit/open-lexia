@@ -1,2 +1,0 @@
-D:/citroen-can-interface/build/_deps/picotool-build/enc_bootloader/CMakeFiles/edit_cache.dir
-D:/citroen-can-interface/build/_deps/picotool-build/enc_bootloader/CMakeFiles/rebuild_cache.dir

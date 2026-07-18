@@ -1,1 +1,3 @@
-build/_deps/picotool-src
+build/
+build_host/
+

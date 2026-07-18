@@ -244,3 +244,37 @@ td.code { font-family:var(--mono); color:var(--accent); }
   .sidebar { position:absolute; z-index:20; height:calc(100vh - 52px); }
   .vehicle { display:none; }
 }
+
+/* ---- Telecoding editor (Lexia-style settings menu) ---- */
+.cfg-search { min-width:180px; }
+.cfg-editor { display:flex; flex-direction:column; gap:14px; }
+.cfg-group {
+  background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden;
+}
+.cfg-group h4 {
+  margin:0; padding:9px 14px; font-size:12px; font-weight:700; letter-spacing:.04em;
+  text-transform:uppercase; color:var(--accent);
+  background:var(--panel2); border-bottom:1px solid var(--line);
+}
+.cfg-row {
+  display:flex; align-items:center; gap:12px; padding:9px 14px;
+  border-bottom:1px solid var(--line);
+}
+.cfg-row:last-child { border-bottom:0; }
+.cfg-row:hover { background:var(--panel2); }
+.cfg-info { display:flex; flex-direction:column; gap:2px; min-width:0; flex:1; }
+.cfg-name { font-size:13px; color:var(--txt); }
+.cfg-zone { font-size:10px; color:var(--faint); font-family:var(--mono); }
+.cfg-act { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+.cfg-cur { font-size:11px; min-width:90px; text-align:right; }
+.cfg-cur:not(.muted) { color:var(--ok); }
+.cfg-ctrl {
+  background:var(--bg); color:var(--txt); border:1px solid var(--line2);
+  border-radius:7px; padding:5px 8px; font-size:12px; max-width:220px;
+}
+.cfg-ctrl:disabled { opacity:.5; }
+.btn.mini { padding:5px 10px; font-size:12px; }
+@media (max-width:760px){
+  .cfg-row { flex-wrap:wrap; }
+  .cfg-cur { text-align:left; min-width:0; }
+}

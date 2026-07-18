@@ -17,11 +17,15 @@ if(HOST_TEST)
 endif()
 
 # --- Pico firmware ---
+# pico_sdk_import.cmake sets CMAKE_TOOLCHAIN_FILE, which CMake only honours if
+# it's included before project() — otherwise project() locks in the host
+# compiler and every cross-compiled source/asm file fails to build.
+include(pico_sdk_import.cmake)
+
 project(citroen_can_interface C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
 
-include(pico_sdk_import.cmake)
 pico_sdk_init()
 
 add_executable(citroen_can_interface
