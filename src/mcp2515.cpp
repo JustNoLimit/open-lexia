@@ -121,6 +121,10 @@ void Mcp2515::setSnifferFilters() {
 
 McpError Mcp2515::setNormalMode()     { return setMode(REQOP_NORMAL); }
 McpError Mcp2515::setListenOnlyMode() { return setMode(REQOP_LISTENONLY); }
+McpError Mcp2515::setLoopbackMode() {
+    static constexpr uint8_t REQOP_LOOPBACK = 0x40;
+    return setMode(REQOP_LOOPBACK);
+}
 
 bool Mcp2515::hasRx() {
     // INT pin low => an interrupt is pending. Cheap poll, no status read needed.

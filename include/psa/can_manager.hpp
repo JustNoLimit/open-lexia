@@ -27,11 +27,17 @@ public:
     bool hasRx(Bus b) const;
     McpError read(Bus b, CanFrame& out);
     McpError send(Bus b, const CanFrame& f);
+    // Whether this bus's MCP2515 answered during init(). A bus with no chip
+    // wired up must never be touched again — its SPI peripheral can wedge
+    // (spi_write_blocking spins forever) once Wi-Fi/cyw43 comes up.
+    bool ready(Bus b) const { return b == Bus::HighSpeed ? hs_ready_ : ls_ready_; }
     Mcp2515& hs() { return hs_; }
     Mcp2515& ls() { return ls_; }
 private:
     Mcp2515 hs_;
     Mcp2515 ls_;
+    bool hs_ready_ = false;
+    bool ls_ready_ = false;
 };
 
 } // namespace psa

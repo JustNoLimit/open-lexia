@@ -46,4 +46,7 @@ target_link_libraries(citroen_can_interface
     pico_cyw43_arch_lwip_threadsafe_background
 )
 pico_enable_stdio_usb(citroen_can_interface 1)
+# USB CDC output/input is gated on DTR by default; GUI terminals (e.g. Termix)
+# often don't raise DTR, so the shell looked dead. tud_ready() instead of DTR.
+target_compile_definitions(citroen_can_interface PRIVATE PICO_STDIO_USB_CONNECTION_WITHOUT_DTR=1)
 pico_add_extra_outputs(citroen_can_interface)

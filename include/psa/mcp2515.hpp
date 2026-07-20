@@ -52,19 +52,21 @@ public:
     McpError init(CanBitrate bitrate);
     McpError setNormalMode();
     McpError setListenOnlyMode();   // passive sniffer mode
+    McpError setLoopbackMode();     // internal loopback for self-test
     void     setSnifferFilters();   // accept all standard frames
 
     bool     hasRx();               // check INT pin / status
     McpError read(CanFrame& out);   // defined in isotp.hpp; reuse psa::CanFrame
     McpError send(const CanFrame& f);
 
+    uint8_t  readReg(Reg r);        // public for hw diagnostics
+    void     writeReg(Reg r, uint8_t v); // public for hw diagnostics
+
 private:
     Pins pins_;
     uint8_t spi_buf_[16];
 
     void    csLow();  void csHigh();
-    void    writeReg(Reg r, uint8_t v);
-    uint8_t readReg(Reg r);
     void    bitMod(Reg r, uint8_t mask, uint8_t bits);
     void    writeBytes(Reg r, const uint8_t* b, size_t n);
     void    readBytes(Reg r, uint8_t* b, size_t n);

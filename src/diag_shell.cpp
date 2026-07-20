@@ -245,6 +245,8 @@ void DiagShell::processLine() {
         cmdPdi();
     } else if (strcmp(cmd, "pin") == 0) {
         cmdPin(arg);
+    } else if (strcmp(cmd, "hwtest") == 0) {
+        cmdHwtest();
     } else {
         printf("[DIAG] Unknown command: '%s'. Type 'help'.\n", cmd);
     }
@@ -289,6 +291,7 @@ void DiagShell::cmdHelp() {
         "  program init          BSI factory initialisation (DANGEROUS)\n"
         "  esp calib             ESP steering angle calibration\n"
         "  esp bleed             ABS hydraulic bleeding procedure\n"
+        "  hwtest                Hardware self-test (SPI + CAN loopback)\n"
         "  help                  This message\n"
     );
 }
@@ -410,6 +413,134 @@ void DiagShell::cmdPin(const char* arg) {
     manual_pin_ = pin;
     manual_pin_valid_ = true;
     printf("[DIAG] Manual SecurityAccess PIN set to %04X.\n", pin);
+}
+
+void DiagShell::cmdHwtest() {
+#ifdef HOST_TEST
+    printf("[HWTEST] Not available in host test mode.\n");
+    return;
+#else
+    printf("[HWTEST] === MCP2515 Hardware Self-Test ===\n");
+
+    if (!can_) {
+        printf("[HWTEST] CanManager not initialized.\n");
+        return;
+    }
+
+    // --- Test 1: SPI register read on both buses ---
+    printf("[HWTEST] Test 1: SPI register read...\n");
+
+    uint8_t hs_canstat = can_->hs().readReg(Mcp2515::MCP_CANSTAT);
+    uint8_t ls_canstat = can_->ls().readReg(Mcp2515::MCP_CANSTAT);
+    printf("[HWTEST]   HS CANSTAT = 0x%02X (mode bits: 0x%02X)\n", hs_canstat, hs_canstat & 0xE0);
+    printf("[HWTEST]   LS CANSTAT = 0x%02X (mode bits: 0x%02X)\n", ls_canstat, ls_canstat & 0xE0);
+
+    // A floating/unconnected bus can coincidentally read back a non-0xFF
+    // value (we saw LS read a stable 0x00 with no chip attached), so a plain
+    // "!= 0xFF" check isn't reliable evidence of a real chip. Write a known
+    // pattern to a scratch register (CNF1, safe — we re-init afterwards) and
+    // read it back: only a chip actually present and latched onto the SPI
+    // bus will echo it, a floating line won't reproduce an arbitrary byte.
+    auto spiPresent = [](Mcp2515& mcp) {
+        static constexpr uint8_t kProbe = 0xA5;
+        mcp.writeReg(Mcp2515::MCP_CNF1, kProbe);
+        return mcp.readReg(Mcp2515::MCP_CNF1) == kProbe;
+    };
+    bool hs_ok = spiPresent(can_->hs());
+    bool ls_ok = spiPresent(can_->ls());
+
+    printf("[HWTEST]   HS SPI: %s\n", hs_ok ? "OK" : "FAIL (readback mismatch - check wiring/level-shift)");
+    printf("[HWTEST]   LS SPI: %s\n", ls_ok ? "OK" : "FAIL (readback mismatch - check wiring/level-shift)");
+
+    // Also read CANCTRL to double-check
+    uint8_t hs_canctrl = can_->hs().readReg(Mcp2515::MCP_CANCTRL);
+    uint8_t ls_canctrl = can_->ls().readReg(Mcp2515::MCP_CANCTRL);
+    printf("[HWTEST]   HS CANCTRL = 0x%02X\n", hs_canctrl);
+    printf("[HWTEST]   LS CANCTRL = 0x%02X\n", ls_canctrl);
+
+    if (!hs_ok && !ls_ok) {
+        printf("[HWTEST] FAIL: Both MCP2515 unresponsive. Check SPI wiring + level-shifters.\n");
+        printf("[HWTEST] Expected: GP2-6 (HS) and GP10-14 (LS) via TXS0108E.\n");
+        return;
+    }
+
+    // --- Test 2: Loopback on responding buses ---
+    printf("[HWTEST] Test 2: CAN loopback test...\n");
+
+    auto runLoopback = [&](const char* label, Mcp2515& mcp) {
+        printf("[HWTEST]   %s: switching to loopback mode...\n", label);
+        if (mcp.setLoopbackMode() != McpError::Ok) {
+            printf("[HWTEST]   %s: FAIL (could not enter loopback mode)\n", label);
+            return false;
+        }
+
+        CanFrame tx{};
+        tx.id = 0x7FF;
+        tx.ext = false;
+        tx.dlc = 8;
+        tx.data[0] = 0xDE; tx.data[1] = 0xAD; tx.data[2] = 0xBE; tx.data[3] = 0xEF;
+        tx.data[4] = 0xCA; tx.data[5] = 0xFE; tx.data[6] = 0xBA; tx.data[7] = 0xBE;
+
+        if (mcp.send(tx) != McpError::Ok) {
+            printf("[HWTEST]   %s: FAIL (TX error)\n", label);
+            return false;
+        }
+#ifdef HOST_TEST
+        // In host test mode, just check hasRx/read without delay
+#else
+        sleep_ms(10);
+#endif
+
+        CanFrame rx{};
+        if (!mcp.hasRx()) {
+            printf("[HWTEST]   %s: FAIL (no RX after loopback TX - check CAN-H/CAN-L jumper)\n", label);
+            return false;
+        }
+        if (mcp.read(rx) != McpError::Ok) {
+            printf("[HWTEST]   %s: FAIL (RX read error)\n", label);
+            return false;
+        }
+
+        bool match = (rx.id == tx.id && rx.dlc == tx.dlc);
+        for (int i = 0; i < 8 && match; ++i)
+            if (rx.data[i] != tx.data[i]) match = false;
+
+        if (match) {
+            printf("[HWTEST]   %s: PASS (TX=RX, ID=0x%03X, DLC=%d, data OK)\n", label, rx.id, rx.dlc);
+        } else {
+            printf("[HWTEST]   %s: FAIL (data mismatch: TX=%02X%02X%02X%02X%02X%02X%02X%02X RX=%02X%02X%02X%02X%02X%02X%02X%02X)\n",
+                   label,
+                   tx.data[0],tx.data[1],tx.data[2],tx.data[3],tx.data[4],tx.data[5],tx.data[6],tx.data[7],
+                   rx.data[0],rx.data[1],rx.data[2],rx.data[3],rx.data[4],rx.data[5],rx.data[6],rx.data[7]);
+            return false;
+        }
+
+        // Restore to Normal mode
+        mcp.setNormalMode();
+        return true;
+    };
+
+    bool hs_lb = false, ls_lb = false;
+    if (hs_ok) hs_lb = runLoopback("HS (500k)", can_->hs());
+    if (ls_ok) ls_lb = runLoopback("LS (125k)", can_->ls());
+
+    // --- Summary ---
+    printf("[HWTEST] === Summary ===\n");
+    printf("[HWTEST]   HS SPI: %s  Loopback: %s\n", hs_ok ? "OK" : "FAIL", hs_lb ? "PASS" : (hs_ok ? "FAIL" : "SKIP"));
+    printf("[HWTEST]   LS SPI: %s  Loopback: %s\n", ls_ok ? "OK" : "FAIL", ls_lb ? "PASS" : (ls_ok ? "FAIL" : "SKIP"));
+
+    if (hs_lb || ls_lb) {
+        printf("[HWTEST] At least one bus works. CAN wiring is good.\n");
+    } else {
+        printf("[HWTEST] Both loopbacks failed. Ensure CAN-H/CAN-L are jumpered on the tested bus.\n");
+    }
+
+    // Re-init to restore normal operation
+    printf("[HWTEST] Re-initializing CAN buses...\n");
+    DualCanPins pins;
+    can_->init(pins, false);
+    printf("[HWTEST] Done.\n");
+#endif // !HOST_TEST
 }
 
 void DiagShell::cmdDtc() {

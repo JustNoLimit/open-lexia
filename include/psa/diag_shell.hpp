@@ -75,6 +75,7 @@ private:
     void cmdEsp(const char* arg);
     void cmdPdi();
     void cmdPin(const char* arg);
+    void cmdHwtest();
     void cmdHelp();
 
     // --- Internal helpers ---

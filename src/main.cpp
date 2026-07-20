@@ -1,4 +1,5 @@
 #include "pico/stdlib.h"
+#include "tusb.h"
 #include <cstdio>
 #include "psa/can_manager.hpp"
 #include "psa/isotp.hpp"
@@ -113,6 +114,8 @@ int main() {
 
     psa::CanFrame f;
     while (true) {
+        tud_task();  // service USB CDC every loop; the SDK's background task can
+                     // starve under cyw43 threadsafe_background, stalling shell input
         shell.poll();
         wifi.poll();
 
