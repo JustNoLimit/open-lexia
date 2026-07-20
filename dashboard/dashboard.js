@@ -841,7 +841,8 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     identReading: false,
     cfgRaw: {},          // zoneHex -> [byte,...] last read
     cfgPendingZone: null, // zone whose raw hex line we're expecting
-    cfgReading: false, cfgQueue: null, cfgTimer: null
+    cfgReading: false, cfgQueue: null, cfgTimer: null,
+    gsniffLearned: [], gsniffCands: []
   };
 
   // ---- theme ----
@@ -889,7 +890,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     if (/NEGATIVE|timeout|error|failed|stuck/i.test(t)) return "bad";
     if (/succeeded|success|written|cleared|done|Ready|present/i.test(t)) return "ok";
     if (/pending|Warning|No SecurityAccess|not connected/i.test(t)) return "warn";
-    if (/^\[DIAG\]|^\[SCAN\]|^\[CONFIG\]|^\[FLASH\]|^\[LIVE\]/.test(t)) return "diag";
+    if (/^\[DIAG\]|^\[SCAN\]|^\[CONFIG\]|^\[FLASH\]|^\[LIVE\]|^\[GSNIFF\]/.test(t)) return "diag";
     return "sys";
   }
 
@@ -1066,6 +1067,37 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       if (/F190|^80$/.test(m[1]) && m[2].length >= 11) { $("vehVin").textContent = "VIN " + m[2]; }
       return;
     }
+
+    // guided sniffer (gsniff)
+    if ((m = t.match(/^\[GSNIFF\] Adim (\d+)\/(\d+): (.*)$/))) {
+      if (m[1] === "1") { st.gsniffLearned = []; renderSniffLearned(); }
+      $("sniffStep").innerHTML = "Step " + m[1] + "/" + m[2] + ": <b>" + esc(m[3]) + "</b>";
+      $("btnSniffNext").disabled = false;
+      return;
+    }
+    if ((m = t.match(/^\[GSNIFF\] OGRENILDI (\S+) = (HS|LS) ([0-9A-Fa-f]+) b(\d+)/))) {
+      st.gsniffLearned.push({ label: m[1], bus: m[2], id: m[3].toUpperCase(), byte: m[4] });
+      renderSniffLearned();
+      return;
+    }
+    if ((m = t.match(/^\[GSNIFF\] OGRENILDI (\S+) = YOK/))) {
+      st.gsniffLearned.push({ label: m[1], bus: "—", id: "—", byte: "—" });
+      renderSniffLearned();
+      return;
+    }
+    if (/^\[GSNIFF\] '.*' senaryosu tamamlandi/.test(t)) { $("btnSniffNext").disabled = true; return; }
+    if ((m = t.match(/^\[GSNIFF\] (HS|LS) ([0-9A-Fa-f]+) b(\d+) chg=(\d+) min=(\d+) max=(\d+) base=(\d+) ?(\*)?/))) {
+      st.gsniffCands.push({ bus: m[1], id: m[2].toUpperCase(), byte: m[3], chg: m[4], min: m[5], max: m[6], base: m[7], exact: !!m[8] });
+      renderSniffCands();
+      return;
+    }
+    if (/^\[GSNIFF\] Tablo temizlendi/.test(t)) {
+      st.gsniffLearned = []; st.gsniffCands = [];
+      renderSniffLearned(); renderSniffCands();
+      $("sniffStep").textContent = "Pick a scenario and press Run scenario.";
+      $("btnSniffNext").disabled = true;
+      return;
+    }
   }
 
   function labelOf(id) { var e = ECUS.filter(function (x) { return x.id === id; })[0]; return e ? e.label : null; }
@@ -1080,6 +1112,30 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       return '<tr><td class="code">' + d.code + '</td><td class="muted">fault ' + d.code + '</td><td>' + pill + ' <span class="muted">0x' + d.status + '</span></td></tr>';
     }).join("");
   }
+  // ---- guided sniffer ----
+  function renderSniffLearned() {
+    var body = $("sniffLearnedBody");
+    body.innerHTML = st.gsniffLearned.map(function (l) {
+      return "<tr><td>" + esc(l.label) + "</td><td>" + l.bus + "</td><td>" + l.id + "</td><td>" + l.byte + "</td></tr>";
+    }).join("");
+    $("sniffLearnedTable").hidden = st.gsniffLearned.length === 0;
+    updateSniffEmpty();
+  }
+  function renderSniffCands() {
+    var body = $("sniffCandBody");
+    body.innerHTML = st.gsniffCands.map(function (c) {
+      return "<tr><td>" + c.bus + "</td><td>" + c.id + "</td><td>b" + c.byte + "</td><td>" + c.chg +
+        "</td><td>" + c.min + "</td><td>" + c.max + "</td><td>" + c.base + "</td><td>" +
+        (c.exact ? '<span class="pill ok">exact</span>' : "") + "</td></tr>";
+    }).join("");
+    $("sniffCandTable").hidden = st.gsniffCands.length === 0;
+    updateSniffEmpty();
+  }
+  function clearSniffCands() { st.gsniffCands = []; renderSniffCands(); }
+  function updateSniffEmpty() {
+    $("sniffEmpty").hidden = st.gsniffLearned.length > 0 || st.gsniffCands.length > 0;
+  }
+
   // ---- Telecoding editor (Lexia-style: menu of named settings, no raw hex) ----
   function cfgParamsFor(id) {
     var c = (typeof ECU_CONFIG_PARAMS !== "undefined") && ECU_CONFIG_PARAMS[id];
@@ -1303,6 +1359,30 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       var lines = $("srecInput").value.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
       lines.reduce(function (p, l) { return p.then(function () { return cmd("flash " + l); }); }, Promise.resolve());
     });
+
+    // guided sniffer — raw-bus tool, works without connecting to an ECU.
+    $("btnSniffRun").addEventListener("click", function () {
+      st.gsniffLearned = []; renderSniffLearned();
+      $("btnSniffNext").disabled = true;
+      cmd("gsniff run " + $("sniffScenario").value);
+    });
+    $("btnSniffNext").addEventListener("click", function () { cmd("gsniff next"); });
+    $("btnSniffBase").addEventListener("click", function () { cmd("gsniff base"); });
+    $("btnSniffStart").addEventListener("click", function () {
+      clearSniffCands();
+      var mode = $("sniffMode").value;
+      if (mode === "count") cmd("gsniff count " + ($("sniffN").value || 5));
+      else cmd("gsniff " + mode);
+    });
+    $("btnSniffStop").addEventListener("click", function () { clearSniffCands(); cmd("gsniff stop"); });
+    $("btnSniffClear").addEventListener("click", function () { cmd("gsniff clear"); });
+    $("btnSniffWatch").addEventListener("click", function () {
+      var id = $("sniffWatchId").value.trim(); if (!id) return;
+      cmd("gsniff watch " + $("sniffWatchBus").value + " " + hx(id));
+    });
+    $("btnSniffWatchOff").addEventListener("click", function () { cmd("gsniff watch off"); });
+    $("btnSniffSave").addEventListener("click", function () { cmd("gsniff save"); });
+    $("btnSniffLoad").addEventListener("click", function () { cmd("gsniff load"); });
 
     // sidebar toggle
     $("sideToggle").addEventListener("click", function () { $("sidebar").classList.toggle("collapsed"); });

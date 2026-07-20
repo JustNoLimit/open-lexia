@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cctype>
 #include <cstdarg>
+#include <cstdlib>
 
 // Use Pico SDK timer for timestamps when on hardware; fallback for host tests.
 #ifdef HOST_TEST
@@ -42,6 +43,7 @@ void DiagShell::init(CanManager* can) {
     config_zone_index_ = 0;
     proc_ = Procedure::None;
     proc_step_ = 0;
+    sniffer_.init();
 }
 
 void DiagShell::diagLog(const char* fmt, ...) const {
@@ -108,6 +110,9 @@ bool DiagShell::poll() {
             abortProcedure("Response timeout during procedure");
         }
     }
+
+    // Guided sniffer: auto-close the baseline window on its deadline.
+    sniffer_.tick(get_time_us());
 
     // Check for serial input
     if (readLine()) {
@@ -247,6 +252,8 @@ void DiagShell::processLine() {
         cmdPin(arg);
     } else if (strcmp(cmd, "hwtest") == 0) {
         cmdHwtest();
+    } else if (strcmp(cmd, "gsniff") == 0) {
+        cmdGuidedSniff(arg);
     } else {
         printf("[DIAG] Unknown command: '%s'. Type 'help'.\n", cmd);
     }
@@ -292,6 +299,7 @@ void DiagShell::cmdHelp() {
         "  esp calib             ESP steering angle calibration\n"
         "  esp bleed             ABS hydraulic bleeding procedure\n"
         "  hwtest                Hardware self-test (SPI + CAN loopback)\n"
+        "  gsniff <sub>          Guided CAN signal discovery (gsniff for subcommands)\n"
         "  help                  This message\n"
     );
 }
@@ -732,6 +740,89 @@ void DiagShell::cmdSniff(const char* arg) {
         printf("[DIAG] Passive sniffing ON.\n");
     } else {
         printf("[DIAG] Usage: sniff [on|off]\n");
+    }
+}
+
+// Guided ("commanded") sniffer: correlates a known physical action with the CAN
+// bytes that move in step with it. See CanSniffer for the capture/scoring logic.
+void DiagShell::cmdGuidedSniff(const char* arg) {
+    while (*arg && isspace(static_cast<unsigned char>(*arg))) arg++;
+    char sub[16] = {0};
+    size_t i = 0;
+    while (arg[i] && !isspace(static_cast<unsigned char>(arg[i])) && i < sizeof(sub) - 1) {
+        sub[i] = arg[i];
+        i++;
+    }
+    const char* subarg = arg + i;
+    while (*subarg && isspace(static_cast<unsigned char>(*subarg))) subarg++;
+
+    if (strcmp(sub, "run") == 0) {
+        const CanSniffer::Scenario* sc = findScenario(subarg);
+        if (!sc) { printf("[GSNIFF] Bilinmeyen senaryo: '%s'. Mevcut: climate\n", subarg); return; }
+        sniffer_.beginRun(sc, get_time_us());
+    } else if (strcmp(sub, "next") == 0) {
+        sniffer_.nextStep(get_time_us());
+    } else if (strcmp(sub, "base") == 0) {
+        uint64_t dur = CanSniffer::kDefaultBaselineUs;
+        int sec = atoi(subarg);
+        if (sec > 0) dur = static_cast<uint64_t>(sec) * 1000000ULL;
+        sniffer_.beginBaseline(get_time_us(), dur);
+    } else if (strcmp(sub, "count") == 0) {
+        int n = atoi(subarg);
+        if (n <= 0 || n > 255) { printf("[GSNIFF] Usage: gsniff count <N>\n"); return; }
+        sniffer_.beginCount(static_cast<uint8_t>(n));
+    } else if (strcmp(sub, "hold") == 0) {
+        sniffer_.beginHold();
+    } else if (strcmp(sub, "sweep") == 0) {
+        sniffer_.beginSweep();
+    } else if (strcmp(sub, "stop") == 0) {
+        sniffer_.stop();
+    } else if (strcmp(sub, "report") == 0) {
+        sniffer_.report();
+    } else if (strcmp(sub, "clear") == 0) {
+        sniffer_.clear();
+    } else if (strcmp(sub, "status") == 0) {
+        sniffer_.status();
+    } else if (strcmp(sub, "watch") == 0) {
+        if (strcmp(subarg, "off") == 0) { sniffer_.watchOff(); return; }
+        if (!*subarg) { printf("[GSNIFF] Usage: gsniff watch <hs|ls> <hexid> | watch off\n"); return; }
+        char busch = static_cast<char>(toupper(static_cast<unsigned char>(*subarg)));
+        const char* p = subarg;
+        while (*p && !isspace(static_cast<unsigned char>(*p))) p++;
+        while (*p && isspace(static_cast<unsigned char>(*p))) p++;
+        uint16_t idv = 0;
+        if (!*p || !parseHexU16(p, nullptr, &idv)) {
+            printf("[GSNIFF] Usage: gsniff watch <hs|ls> <hexid>\n");
+            return;
+        }
+        sniffer_.watch(busch == 'H' ? Bus::HighSpeed : Bus::LowSpeed, idv);
+    } else if (strcmp(sub, "save") == 0) {
+#ifndef HOST_TEST
+        sniffer_.save();
+#else
+        printf("[GSNIFF] save: host test'te desteklenmiyor.\n");
+#endif
+    } else if (strcmp(sub, "load") == 0) {
+#ifndef HOST_TEST
+        sniffer_.load();
+#else
+        printf("[GSNIFF] load: host test'te desteklenmiyor.\n");
+#endif
+    } else {
+        printf(
+            "Usage: gsniff <alt-komut>\n"
+            "  run <senaryo>          Hazir kontrol listesini yurut (orn. run climate)\n"
+            "  next                   Senaryoda sonraki adima gec\n"
+            "  base [sn]              Gurultu tabanini kaydet (varsayilan 3sn)\n"
+            "  count <N>              Ad-hoc: eylemi N kez yap, sonra 'stop'\n"
+            "  hold                   Ad-hoc: degeri sabit tut, sonra 'stop'\n"
+            "  sweep                  Ad-hoc: degeri tek yonde degistir, sonra 'stop'\n"
+            "  stop                   Ad-hoc penceresini kapat, raporu yaz\n"
+            "  report                 Son raporu tekrar yaz\n"
+            "  watch <hs|ls> <hexid>  Tek ID'yi canli dok (watch off ile kapat)\n"
+            "  save | load            Ogrenilen haritayi flash'a yaz/oku\n"
+            "  clear | status         Tabloyu sifirla | durum ozeti\n"
+        );
     }
 }
 
@@ -1811,6 +1902,7 @@ void DiagShell::cmdStatus() {
         printf("Live param: %04X\n", live_param_id_);
     }
     printf("Sniff:      %s\n", sniff_enabled_ ? "on" : "off");
+    printf("Gsniff:     %s\n", sniffer_.active() ? "capturing" : "idle");
     printf("Scan:       %s\n", scan_active_ ? "active" : "inactive");
     printf("Flash:      %s\n", flash_active_ ? "active" : "inactive");
     printf("========================\n");

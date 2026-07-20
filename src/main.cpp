@@ -122,14 +122,16 @@ int main() {
         if (can.hasRx(psa::Bus::HighSpeed)) {
             if (can.read(psa::Bus::HighSpeed, f) == psa::McpError::Ok) {
                 if (!shell.feedDiagFrame(f)) {
-                    if (shell.sniffEnabled()) decode_sniffed(psa::Bus::HighSpeed, f);
+                    if (shell.gsniffActive()) shell.feedCaptureFrame(psa::Bus::HighSpeed, f);
+                    else if (shell.sniffEnabled()) decode_sniffed(psa::Bus::HighSpeed, f);
                 }
             }
         }
         if (can.hasRx(psa::Bus::LowSpeed)) {
             if (can.read(psa::Bus::LowSpeed, f) == psa::McpError::Ok) {
                 if (!shell.feedDiagFrame(f)) {
-                    if (shell.sniffEnabled()) decode_sniffed(psa::Bus::LowSpeed, f);
+                    if (shell.gsniffActive()) shell.feedCaptureFrame(psa::Bus::LowSpeed, f);
+                    else if (shell.sniffEnabled()) decode_sniffed(psa::Bus::LowSpeed, f);
                 }
             }
         }

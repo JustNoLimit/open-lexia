@@ -5,6 +5,62 @@
 
 ---
 
+## 0d. GÜNCELLEME — 2026-07-20 (kılavuzlu/komutlu CAN sniffing — sinyal keşif aracı)
+
+- **Amaç:** RD4 yerine custom head-unit/dashboard yapabilmek için önce bilinmeyen broadcast
+  CAN sinyallerinin (özellikle klima 0x1D0) bayt yerleşimini çıkarmak. Düz sniff tek başına
+  yorumlanamaz (LS bus'ta ~40 ID sürekli değişir); çözüm: bilinen bir fiziksel eylemi (N kez
+  butona bas / değeri sabit tut / yavaşça değiştir) sayılabilir bir imzaya çevirip CAN
+  baytlarıyla eşleştirmek.
+- **Yeni modül:** [can_sniffer.hpp](include/psa/can_sniffer.hpp) / [can_sniffer.cpp](src/can_sniffer.cpp)
+  — `CanSniffer` sınıfı, donanımsız (HOST_TEST altında test edilir). ID başına (bus+id ile
+  anahtarlı, `kMaxSlots=64`) bayt bazında değişim sayacı/min/max/yön tutan bir tablo (~4 KB
+  RAM — RP2350'nin 520 KB SRAM'inde önemsiz).
+  - **3 yakalama modu:** `Count` (N kez değişim bekleniyor — butonlar), `Hold` (yeni bir
+    değerde sabit kalıyor — RPM/setpoint tutma), `Sweep` (tek yönlü monoton değişim — yavaş
+    devir yükseltme). Skorlama: `matchScore()`, düşük=daha iyi eşleşme.
+  - **Baseline maskeleme:** `beginBaseline()` öncesi kendiliğinden değişen (ID,bayt) çiftlerini
+    `noisy_mask` ile işaretler; sonraki tüm modlarda bu baytlar aday listesine hiç girmez.
+  - **Senaryo yürütücü (asıl kullanım şekli):** `beginRun()`/`nextStep()` — hazır bir adım
+    listesini (`Step{prompt,mode,expected,label}`) sırayla yürütür, her adımda en iyi adayı
+    otomatik etiketleyip `learned_[]`'e yazar. İlk senaryo: `kClimateScenario` (10 adım: şoför/
+    yolcu sıcaklık ±, fan ±, auto, A/C, hava yönü, devirdaim).
+  - **Flash kalıcılığı (isteğe bağlı, `#ifndef HOST_TEST`):** `save()/load()` sadece damıtılmış
+    `learned_[]` haritasını (birkaç KB) son flash sektörüne (`PICO_FLASH_SIZE_BYTES -
+    FLASH_SECTOR_SIZE`) yazar/okur, `flash_safe_execute()` ile. Bu proje core1 hiç başlatmıyor
+    → `PICO_FLASH_ASSUME_CORE1_SAFE=1` derleme tanımı eklendi ([CMakeLists.txt](CMakeLists.txt)),
+    `hardware_flash`/`pico_flash` linklendi. Ham frame kaydı YOK, sadece sonuç.
+- **Komut:** `gsniff <alt-komut>` — `run <senaryo> | next | base [sn] | count N | hold | sweep |
+  stop | report | watch <hs|ls> <hexid> | save | load | clear | status`.
+  [diag_shell.hpp](include/psa/diag_shell.hpp) / [diag_shell.cpp](src/diag_shell.cpp)'de
+  `cmdGuidedSniff()`; dispatch `processLine()`'a eklendi, `poll()` içinde `sniffer_.tick()`
+  baseline penceresini otomatik kapatıyor.
+- **Frame yönlendirme:** [main.cpp](src/main.cpp) RX drenajında, `feedDiagFrame` tüketmediği
+  frame'ler için: `gsniffActive()` (capturing VEYA watch açık) ise sniffer'a, değilse eskisi
+  gibi `decode_sniffed()`'e gider — pasif `sniff on/off` ile çakışmıyor.
+- **Web arayüzü:** Yeni **Sniffer** sekmesi ([dashboard.html](dashboard/dashboard.html)/
+  [dashboard.js](dashboard/dashboard.js)) — ECU connect/unlock GEREKTİRMEZ (ham bus aracı,
+  `setConnected` disable listesinde değil). Senaryo seçici + "Sonraki adım" büyük buton +
+  adım-metni banner'ı; altında ad-hoc mod seçici (Count/Hold/Sweep) + Baseline/Start/Stop;
+  öğrenilen-harita ve aday tabloları `[GSNIFF] ...` SSE satırlarından `handleLine()`'da
+  regex ile dolduruluyor (bkz. dosyanın "guided sniffer" bölümü). **Değişince
+  `python3 scripts/generate_assets.py` çalıştırılmalı** (yapıldı, `dashboard_assets.h`
+  güncel).
+- **Yan düzeltme:** `CMakeLists.txt`'nin `HOST_TEST` dalı `target_compile_definitions(test_psa
+  PRIVATE HOST_TEST)` içermiyordu — `cmake -B build_host -DHOST_TEST=ON` dokümante edilen
+  yol hiç derlenmiyordu (sadece §6'daki manuel `g++ -DHOST_TEST ...` komutu çalışıyordu).
+  Tek satır eklenip düzeltildi; artık ikisi de çalışıyor.
+- **Doğrulama:** `cmake -B build_host -DHOST_TEST=ON && cmake --build build_host &&
+  ./build_host/test_psa` → 4 yeni `can_sniffer` testi dahil hepsi geçiyor (Count/Hold/Sweep
+  + 10 adımlık senaryo FSM'i uçtan uca). Firmware de gerçek Pico SDK ile (`/home/umut/pico/pico-sdk`)
+  temiz derlendi (`.uf2` üretildi, text≈452 KB / 4 MB flash, bss≈84 KB / 520 KB SRAM).
+  **Gerçek donanımda henüz denenmedi** (bu ortamda araç/CAN bus yok) — `hwtest` ile aynı
+  durumda: mantık doğrulandı, fiziksel doğrulama kullanıcıya kalıyor. Web tarafı statik bir
+  önizleme sunucusuyla görsel olarak kontrol edildi (sekme render oluyor, buton→komut kablolaması
+  çalışıyor, konsol hatasız); gerçek SSE akışı cihaz olmadan test edilemedi.
+
+---
+
 ## 0c. GÜNCELLEME — 2026-07-20 (donanım self-test + USB CDC/DTR fix)
 
 - **Ölü bus izolasyonu (kritik):** Bir MCP2515 fiziksel olarak takılı değilse, Wi-Fi/cyw43

@@ -1,6 +1,8 @@
 // Host self-check for the pure protocol logic. No Pico SDK, no hardware.
 // Compile and run:
-//   g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp -o test_psa && ./test_psa
+//   cmake -B build_host -DHOST_TEST=ON && cmake --build build_host && ./build_host/test_psa
+//   or directly:
+//   g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp src/wifi_server.cpp src/can_sniffer.cpp -o test_psa && ./test_psa
 //   (clang++ works too). Returns 0 on success, non-zero on the first failed assert.
 //
 // Covers the two pieces of non-trivial logic in the project:
@@ -17,6 +19,7 @@
 #include "psa/ecu_keys.hpp"
 #include "psa/live_data.hpp"
 #include "psa/flash_engine.hpp"
+#include "psa/can_sniffer.hpp"
 #include <vector>
 
 namespace psa {
@@ -613,6 +616,170 @@ static void test_isotp_malformed_frames_rejected() {
     printf("  iso-tp: malformed single/first frames rejected OK\n");
 }
 
+static void test_can_sniffer_count_mode() {
+    psa::CanSniffer sniff;
+    sniff.init();
+    psa::CanFrame f{};
+    f.dlc = 8;
+
+    // Baseline: 0x0B6 byte0 is a free-running counter (noisy, gets masked);
+    // 0x1D0 sits quiet.
+    sniff.beginBaseline(0, 1000);
+    f.id = 0x0B6;
+    for (int i = 0; i < 4; ++i) {
+        for (int b = 0; b < 8; ++b) f.data[b] = 0;
+        f.data[0] = static_cast<uint8_t>(i);
+        sniff.feed(psa::Bus::HighSpeed, f);
+    }
+    f.id = 0x1D0;
+    for (int b = 0; b < 8; ++b) f.data[b] = 0x10;
+    sniff.feed(psa::Bus::LowSpeed, f);
+    sniff.tick(1000);
+
+    // Count phase: "press driver-temp-down 5 times" -> 0x1D0 byte5 changes 5x.
+    sniff.beginCount(5);
+    uint8_t v = 0x10;
+    for (int i = 0; i < 5; ++i) {
+        f.id = 0x1D0;
+        for (int b = 0; b < 8; ++b) f.data[b] = 0x10;
+        v--;
+        f.data[5] = v;
+        sniff.feed(psa::Bus::LowSpeed, f);
+    }
+    // Noise on the masked byte must not out-rank the real signal.
+    f.id = 0x0B6;
+    for (int b = 0; b < 8; ++b) f.data[b] = 0;
+    f.data[0] = 0x55;
+    sniff.feed(psa::Bus::HighSpeed, f);
+
+    sniff.stop();
+
+    psa::Bus bus; uint16_t id; uint8_t byte; uint16_t score;
+    assert(sniff.bestCandidate(&bus, &id, &byte, &score));
+    assert(bus == psa::Bus::LowSpeed);
+    assert(id == 0x1D0);
+    assert(byte == 5);
+    assert(score == 0); // exact match: 5 observed vs 5 expected
+
+    printf("  can_sniffer: count-mode baseline masking + exact match OK\n");
+}
+
+static void test_can_sniffer_hold_mode() {
+    psa::CanSniffer sniff;
+    sniff.init();
+    psa::CanFrame f{};
+    f.dlc = 8;
+
+    // Baseline: RPM (0x0B6 bytes0-1) idles at 800rpm raw = 0x1900.
+    sniff.beginBaseline(0, 1000);
+    f.id = 0x0B6;
+    f.data[0] = 0x19; f.data[1] = 0x00;
+    for (int b = 2; b < 8; ++b) f.data[b] = 0;
+    sniff.feed(psa::Bus::HighSpeed, f);
+    sniff.tick(1000);
+
+    // Hold: rev to ~2000rpm raw = 0x3E80 and keep it there.
+    sniff.beginHold();
+    f.data[0] = 0x3E; f.data[1] = 0x80;
+    sniff.feed(psa::Bus::HighSpeed, f);
+    sniff.feed(psa::Bus::HighSpeed, f); // repeats at the same value: held steady
+    sniff.feed(psa::Bus::HighSpeed, f);
+    sniff.stop();
+
+    psa::Bus bus; uint16_t id; uint8_t byte; uint16_t score;
+    assert(sniff.bestCandidate(&bus, &id, &byte, &score));
+    assert(bus == psa::Bus::HighSpeed);
+    assert(id == 0x0B6);
+    assert(byte == 0); // first byte that left the baseline value wins the tie
+    assert(score == 1); // one transition into the held value, then rock steady
+
+    printf("  can_sniffer: hold-mode steady-value detection OK\n");
+}
+
+static void test_can_sniffer_sweep_mode() {
+    psa::CanSniffer sniff;
+    sniff.init();
+    psa::CanFrame f{};
+    f.dlc = 8;
+
+    sniff.beginBaseline(0, 1000);
+    f.id = 0x0B6;
+    f.data[0] = 0x19; f.data[1] = 0x00;
+    for (int b = 2; b < 8; ++b) f.data[b] = 0;
+    sniff.feed(psa::Bus::HighSpeed, f);
+    sniff.tick(1000);
+
+    // Sweep: slowly raise the low byte of RPM, one direction only.
+    sniff.beginSweep();
+    uint8_t v = 0x00;
+    for (int i = 0; i < 6; ++i) {
+        v = static_cast<uint8_t>(v + 0x10);
+        f.data[1] = v;
+        sniff.feed(psa::Bus::HighSpeed, f);
+    }
+    sniff.stop();
+
+    psa::Bus bus; uint16_t id; uint8_t byte; uint16_t score;
+    assert(sniff.bestCandidate(&bus, &id, &byte, &score));
+    assert(bus == psa::Bus::HighSpeed);
+    assert(id == 0x0B6);
+    assert(byte == 1);
+
+    printf("  can_sniffer: sweep-mode monotonic detection OK\n");
+}
+
+static void test_can_sniffer_climate_scenario() {
+    psa::CanSniffer sniff;
+    sniff.init();
+    psa::CanFrame f{};
+    f.dlc = 8;
+    f.id = 0x1D0;
+    for (int b = 0; b < 8; ++b) f.data[b] = 0x10;
+
+    uint64_t now = 0;
+    sniff.beginRun(&psa::kClimateScenario, now);
+    assert(sniff.scenarioActive());
+    assert(sniff.mode() == psa::CanSniffer::Mode::Baseline);
+
+    sniff.feed(psa::Bus::LowSpeed, f); // quiet baseline sample
+    now += psa::CanSniffer::kDefaultBaselineUs;
+    sniff.tick(now); // ends baseline, auto-starts step 1 (drv_temp_down, count=5)
+    assert(sniff.mode() == psa::CanSniffer::Mode::Count);
+
+    uint8_t v5 = 0x10;
+    for (int i = 0; i < 5; ++i) { v5--; f.data[5] = v5; sniff.feed(psa::Bus::LowSpeed, f); }
+    sniff.nextStep(now); // learns drv_temp_down, starts drv_temp_up
+
+    for (int i = 0; i < 5; ++i) { v5++; f.data[5] = v5; sniff.feed(psa::Bus::LowSpeed, f); }
+    sniff.nextStep(now); // learns drv_temp_up, starts pass_temp_down
+
+    assert(sniff.learnedCount() == 2);
+    assert(std::strcmp(sniff.learnedAt(0).label, "drv_temp_down") == 0);
+    assert(sniff.learnedAt(0).bus == psa::Bus::LowSpeed);
+    assert(sniff.learnedAt(0).id == 0x1D0);
+    assert(sniff.learnedAt(0).byte == 5);
+    assert(std::strcmp(sniff.learnedAt(1).label, "drv_temp_up") == 0);
+    assert(sniff.learnedAt(1).byte == 5);
+
+    // Drive the remaining steps to confirm the scenario terminates cleanly.
+    while (sniff.scenarioActive()) {
+        uint8_t expected = psa::kClimateScenario.steps[
+            sniff.learnedCount() < psa::kClimateScenario.count ? sniff.learnedCount() : 0].expected;
+        for (uint8_t i = 0; i < expected; ++i) {
+            v5 = static_cast<uint8_t>(v5 + 1);
+            f.data[5] = v5;
+            sniff.feed(psa::Bus::LowSpeed, f);
+        }
+        sniff.nextStep(now);
+    }
+    assert(!sniff.scenarioActive());
+    assert(sniff.mode() == psa::CanSniffer::Mode::Idle);
+    assert(sniff.learnedCount() == psa::kClimateScenario.count);
+
+    printf("  can_sniffer: climate scenario runner (%u steps) terminates cleanly OK\n",
+           static_cast<unsigned>(psa::kClimateScenario.count));
+}
+
 static void test_flash_shell_begin() {
     psa::CanManager can;
     psa::DiagShell shell;
@@ -716,6 +883,10 @@ int main() {
     test_flash_shell_begin();
     test_flash_shell_srecord_staging();
     test_pin_override_flow();
+    test_can_sniffer_count_mode();
+    test_can_sniffer_hold_mode();
+    test_can_sniffer_sweep_mode();
+    test_can_sniffer_climate_scenario();
     printf("all checks passed\n");
     return 0;
 }

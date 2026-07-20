@@ -9,6 +9,7 @@
 #include "psa/isotp.hpp"
 #include "psa/psa_protocol.hpp"
 #include "psa/flash_engine.hpp"
+#include "psa/can_sniffer.hpp"
 
 namespace psa {
 
@@ -31,6 +32,13 @@ public:
     // this routes the frame to the ISO-TP reassembler for the connected ECU.
     // Returns true if the frame was consumed (matched the ECU's recv_id).
     bool feedDiagFrame(const CanFrame& f);
+
+    // Guided sniffer: true while a baseline/count/hold/sweep window is open.
+    bool capturing() const { return sniffer_.active(); }
+    // True whenever the guided sniffer wants frames at all (capturing or watching
+    // a single ID) — main.cpp routes frames here instead of the passive decoder.
+    bool gsniffActive() const { return sniffer_.active() || sniffer_.isWatching(); }
+    void feedCaptureFrame(Bus b, const CanFrame& f) { sniffer_.feed(b, f); }
 
     // Feed a command line directly (useful for scripting and unit testing)
     void feedCommandLine(const char* line);
@@ -76,6 +84,7 @@ private:
     void cmdPdi();
     void cmdPin(const char* arg);
     void cmdHwtest();
+    void cmdGuidedSniff(const char* arg);
     void cmdHelp();
 
     // --- Internal helpers ---
@@ -114,6 +123,7 @@ private:
     const EcuAddr*  ecu_ = nullptr;     // currently connected ECU
     Bus             active_bus_ = Bus::HighSpeed;
     bool            sniff_enabled_ = true;
+    CanSniffer      sniffer_;
     bool            unlocked_ = false;
     uint16_t        manual_pin_ = 0;        // user-supplied SecurityAccess PIN (`pin` cmd)
     bool            manual_pin_valid_ = false;
