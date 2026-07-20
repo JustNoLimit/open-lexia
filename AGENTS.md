@@ -5,6 +5,30 @@
 
 ---
 
+## 0c. GÜNCELLEME — 2026-07-20 (donanım self-test + USB CDC/DTR fix)
+
+- **Ölü bus izolasyonu (kritik):** Bir MCP2515 fiziksel olarak takılı değilse, Wi-Fi/cyw43
+  devreye girdikten sonra o bus'un SPI periferiği kilitlenip (`spi_write_blocking` sonsuza
+  kadar bekleyip) tüm ana döngüyü durdurabiliyordu. `CanManager` artık `init()` sırasında
+  her bus'u **bağımsız** açıyor ve hangi bus'ların gerçekten cevap verdiğini
+  (`hs_ready_`/`ls_ready_`) tutuyor; `ready()` false dönen bus'a `hasRx`/`read`/`send` bir
+  daha dokunmuyor. Bkz. [can_manager.hpp](include/psa/can_manager.hpp),
+  [can_manager.cpp](src/can_manager.cpp).
+- **Yeni `hwtest` shell komutu** ([diag_shell.cpp](src/diag_shell.cpp)): SPI kablolamasını
+  (CNF1'e bilinen bir bayt yazıp geri okuyarak — sabit `!= 0xFF` kontrolü floating hat için
+  güvenilmez çıktı) ve CAN loopback'i (`Mcp2515::setLoopbackMode()`, yeni) her bus için ayrı
+  ayrı doğruluyor. **Gerçek donanımda henüz denenmedi** — host test'te `#ifdef HOST_TEST` ile
+  devre dışı, sadece derleme/mantık doğrulandı.
+- **USB CDC / shell "ölü" görünme sorunu düzeltildi:** Pico SDK'nın USB stdio'su varsayılan
+  olarak DTR sinyaline gate'li; Termix gibi GUI terminaller DTR kaldırmıyor. Çözüm:
+  `PICO_STDIO_USB_CONNECTION_WITHOUT_DTR=1` derleme tanımı ([CMakeLists.txt](CMakeLists.txt))
+  + ana döngüde her turda `tud_task()` çağrısı ([main.cpp](src/main.cpp)) — SDK'nın arkaplan
+  görevi cyw43 threadsafe_background altında aç kalabiliyordu.
+- `test_psa` artık git'te takip edilmiyor (derlenmiş binary, `.gitignore`'a eklendi);
+  `hardware/` (FreeCAD kutu tasarımı + STEP parçaları) repoya eklendi.
+
+---
+
 ## 0. GÜNCELLEME — 2026-07-18 (tersine mühendislik + düzeltme oturumu)
 
 Kod derinlemesine incelendi, ludwig-v kaynaklarına karşı doğrulandı ve arayüz sıfırdan
@@ -168,6 +192,7 @@ Telecoding sekmesi ham-hex `prompt`'tan **Lexia-tarzı gerçek ayar menüsüne**
   - **Hâlâ bilinmiyor (kaynakta karşılığı yok):** CLIM, HDC, SPNEU, AUTORADIO, BML, ADC, MDP_CONDUCT, MDP_PASSAG, PROJECTEURS, AIDE_STAT — bunlar için gerçek üretici sırrı gerekiyor, kod/analizle üretilemez.
 - **Kalan eski v1 dosyalar:** doğrulandı — `dashboard/index.html`, `dashboard/script.js`, `dashboard/style.css` artık **mevcut değil** (önceki oturumda silinmiş), bu madde geçersiz.
 - **Lexia 3 referansı:** `docs/lexia3_menu_reference.md` artık VAR (2026-07-18'de eklendi, kaynak: Lexia 3 Part I/II/III video analizi, C5 3.0L V6 test aracı VIN VF7RCXFUJ6L502935). İçeriği `ecu_zones.hpp`/`ecu_params.hpp`'deki BSI Configuration + Customer Options + AUTORADIO Config parametreleriyle bit-bit örtüşüyor — muhtemelen bu tabloların orijinal kaynağı. İkinci referans: `docs/psa_can_reference.md`.
+- **`hwtest` gerçek donanımda doğrulanmadı (bkz. §0c):** SPI-readback ve CAN-loopback testi mantığı host test'te derleniyor ama `#ifdef HOST_TEST` ile çalıştırılmıyor (gerçek MCP2515 gerektirir). Karta ilk seri bağlantıda `hwtest` çalıştırılıp HS/LS her ikisinin de PASS verdiği teyit edilmeli.
 
 ---
 
