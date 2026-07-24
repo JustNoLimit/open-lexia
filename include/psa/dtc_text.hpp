@@ -2,9 +2,11 @@
 // Two layers:
 //   1. formatDtcCode(): algorithmic SAE J2012 / ISO 15031-6 decode of the 2-byte
 //      code into its P/C/B/U + 4-digit form. No table, correct for EVERY code.
-//   2. dtcDescription(): lookup of the common *standardised generic* OBD-II codes.
-//      Manufacturer-specific PSA codes that aren't in the table still get their
-//      P-code from layer 1 and simply show no description (honest — not guessed).
+//   2. dtcDescription(): lookup of common *standardised generic* OBD-II codes
+//      plus a curated set of *PSA manufacturer-specific* P1xxx/P2xxx codes
+//      (Diagbox meanings for HDi EDC16/DCM ECUs — see the caveat by that block).
+//      Codes not in the table still get their P-code from layer 1 and simply
+//      show no description (honest — not guessed).
 // Pure, host-compilable, no hardware deps.
 #pragma once
 #include <cstdint>
@@ -137,6 +139,77 @@ inline constexpr DtcText kDtcText[] = {
     {0xC121, "Lost communication with ABS module"}, // U0121
     {0xC126, "Lost communication with steering angle sensor"}, // U0126
     {0xC155, "Lost communication with instrument cluster"},    // U0155
+
+    // --- PSA manufacturer-specific (P1xxx/P2xxx) ------------------------------
+    // Diagbox meanings for the common EDC16/DCM HDi ECUs. IMPORTANT: PSA remaps
+    // P1xxx/P2xxx per engine-ECU generation — the SAME code means different
+    // things on EDC15 vs EDC16 vs DCM3.5. Treat these as a strong hint, not
+    // gospel; confirm against the ECU. Where two sources disagreed (P1193-P1198)
+    // the more granular wording is used. P-code hex == the 4-digit number.
+    // Diesel injection / rail pressure
+    {0x1101, "Atmospheric pressure sensor circuit"},
+    {0x1102, "Needle lift sensor circuit"},
+    {0x1103, "Slider position sensor circuit"},
+    {0x1104, "Variable-geometry aero solenoid valve circuit"},
+    {0x1105, "Injector ventilation solenoid valve circuit"},
+    {0x1113, "Rail pressure too low"},
+    {0x1114, "Injection cut-off test on engine stop (fuel cut)"},
+    {0x1163, "Injector latency-time adjustment problem"},
+    {0x1164, "Fuel pressure drift from rail pressure before start"},
+    {0x1165, "Pressure differential too low"},
+    {0x1166, "Rail pressure too high"},
+    {0x1167, "Fuel pressure regulation: value incorrect"},
+    {0x1169, "Injector voltage converter: value incorrect"},
+    {0x1193, "Injector control: flow too low"},
+    {0x1194, "Injector control: injector jammed closed"},
+    {0x1195, "Injector control: injector stuck open"},
+    {0x1197, "Injector control: harness/injector/ECU power stage"},
+    {0x1198, "Fuel flow regulation electrovalve: flow too low"},
+    {0x11A2, "Injector initialisation: programming not done"},
+    {0x1210, "Fuel pressure regulation electrovalve: open circuit"},
+    {0x1282, "Gas pressure fault"},
+    {0x1283, "Solenoid valve circuit"},
+    {0x1302, "Needle lift / engine speed correlation fault"},
+    // EGR / exhaust / turbo
+    {0x1420, "Exhaust temperature sensor 2: intermittent circuit"},
+    {0x1429, "Differential exhaust pressure: reaction time too long"},
+    {0x1454, "EGR control high"},
+    {0x1455, "EGR control low"},
+    {0x1459, "EGR valve position controller: performance"},
+    {0x1471, "EGR throttle control electrovalve: throttle open"},
+    {0x1491, "EGR strategy: correction too large"},
+    {0x1492, "EGR strategy: correction too small"},
+    {0x1493, "EGR strategy: correction outside range"},
+    // Particulate filter (FAP / Eolys additive)
+    {0x1445, "Max additive threshold in FAP reached"},
+    {0x1446, "FAP additive system: insufficient additive in tank"},
+    {0x1447, "Particulate filter clogged or pierced"},
+    {0x1490, "FAP regeneration driving conditions not met"},
+    // Pre/post heating
+    {0x1403, "Additional heating circuit 1 fault"},
+    {0x1404, "Additional heating circuit 2 fault"},
+    // Network / ECU internal / config
+    {0x1500, "CAN: BSI info, gearbox locked in reverse"},
+    {0x1510, "Auto gearbox ECU: diagnostic LED request"},
+    {0x1536, "Brake switch signal: coherence"},
+    {0x1607, "CAN: vehicle speed limiter error"},
+    {0x1613, "Configuration fault: ECU not configured"},
+    {0x1614, "Accelerator pedal resistance-point sensor: no signal"},
+    {0x1641, "Injection ECU: power stage, injector control"},
+    {0x1693, "Controlled start/stop: requests absent or invalid"},
+    {0x1704, "Brake switch: consistency between 2 signals"},
+    // P2xxx PSA-specific
+    {0x2031, "Cat downstream temp signal: implausible"},
+    {0x2032, "Cat downstream temp signal: short to positive"},
+    {0x2033, "Cat downstream temp signal: short to earth"},
+    {0x2084, "Cat downstream temp signal: coherence in evolution"},
+    {0x2137, "Accelerator pedal: coherence with other pedal signal"},
+    {0x2144, "Electric EGR valve control: short to earth/positive"},
+    {0x2199, "Intake air temp signal: plausibility"},
+    {0x2299, "Accelerator pedal signal: coherence"},
+    {0x2408, "Additive system: fuel tank cap sensor signal"},
+    {0x2670, "Sensor 5V supply fault"},
+    {0x2671, "Sensor 5V supply fault (2)"},
 };
 
 inline constexpr size_t kDtcTextCount = sizeof(kDtcText) / sizeof(kDtcText[0]);

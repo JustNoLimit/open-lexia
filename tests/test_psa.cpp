@@ -877,6 +877,10 @@ static void test_dtc_text() {
     assert(strstr(dtcDescription(0x0300), "misfire") != nullptr);
     assert(dtcDescription(0xC101) != nullptr);          // U0101
     assert(dtcDescription(0x0ABC) == nullptr);          // not in table
+    // PSA-specific: P1445 (FAP additive), P11A2 (injector init).
+    assert(strstr(dtcDescription(0x1445), "FAP") != nullptr);
+    assert(strcmp(formatDtcCode(0x11A2, b), "P11A2") == 0);
+    assert(dtcDescription(0x11A2) != nullptr);
     printf("  dtc_text: J2012 decode + generic description lookup OK\n");
 }
 
