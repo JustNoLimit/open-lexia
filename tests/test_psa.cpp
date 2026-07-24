@@ -884,9 +884,26 @@ static void test_dtc_text() {
     printf("  dtc_text: J2012 decode + generic description lookup OK\n");
 }
 
+static void test_obd_mode01() {
+    using namespace psa;
+    // Real J1979 scalings on known raw values.
+    const uint8_t rpm[] = {0x1A, 0xF8};        // (0x1AF8)/4 = 1726 rpm
+    assert(findObdParam(0x0C)->decode(rpm, 2) > 1725.0f &&
+           findObdParam(0x0C)->decode(rpm, 2) < 1727.0f);
+    const uint8_t temp[] = {0x7B};             // 123 - 40 = 83 °C
+    assert(findObdParam(0x05)->decode(temp, 1) == 83.0f);
+    const uint8_t load[] = {0xFF};             // 255*100/255 = 100 %
+    assert(findObdParam(0x04)->decode(load, 1) == 100.0f);
+    const uint8_t trim[] = {0x80};             // (128-128)*100/128 = 0 %
+    assert(findObdParam(0x06)->decode(trim, 1) == 0.0f);
+    assert(findObdParam(0xAB) == nullptr);     // not a defined PID
+    printf("  obd_mode01: J1979 PID decoders OK\n");
+}
+
 int main() {
     printf("psa self-check\n");
     test_dtc_text();
+    test_obd_mode01();
     test_diag_shell_state();
     test_seedkey_determinism();
     test_seedkey_known_vector();

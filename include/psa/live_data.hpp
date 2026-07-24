@@ -168,4 +168,88 @@ inline const LiveDataParam* findParamInCategories(uint16_t id) {
     return nullptr;
 }
 
+// =============================================================================
+// Standard OBD-II Mode 01 (SAE J1979) — REAL, documented PIDs and scalings.
+// A 2004+ EOBD engine ECU answers these on the 500k HS bus at 0x7DF/0x7E8 via
+// service 0x01. Unlike the PSA-proprietary reads above, every scaling here is
+// from the public J1979 spec, so the numbers are correct once wired to a car.
+// Queried by the `obd` shell command (single-frame, no session), NOT `meas`.
+// =============================================================================
+inline float obdLoad(const uint8_t* d, size_t n)     { return n < 1 ? 0.f : d[0] * 100.0f / 255.0f; }
+inline float obdTempA40(const uint8_t* d, size_t n)  { return n < 1 ? 0.f : static_cast<float>(d[0]) - 40.0f; }
+inline float obdFuelTrim(const uint8_t* d, size_t n) { return n < 1 ? 0.f : (static_cast<float>(d[0]) - 128.0f) * 100.0f / 128.0f; }
+inline float obdFuelPress(const uint8_t* d, size_t n){ return n < 1 ? 0.f : d[0] * 3.0f; }               // kPa
+inline float obdMap(const uint8_t* d, size_t n)      { return n < 1 ? 0.f : static_cast<float>(d[0]); }  // kPa
+inline float obdRpm(const uint8_t* d, size_t n)      { return n < 2 ? 0.f : ((d[0] << 8) | d[1]) / 4.0f; }
+inline float obdSpeed(const uint8_t* d, size_t n)    { return n < 1 ? 0.f : static_cast<float>(d[0]); }  // km/h
+inline float obdTiming(const uint8_t* d, size_t n)   { return n < 1 ? 0.f : d[0] / 2.0f - 64.0f; }       // deg
+inline float obdMaf(const uint8_t* d, size_t n)      { return n < 2 ? 0.f : ((d[0] << 8) | d[1]) / 100.0f; } // g/s
+inline float obdU16(const uint8_t* d, size_t n)      { return n < 2 ? 0.f : static_cast<float>((d[0] << 8) | d[1]); }
+inline float obdRailRel(const uint8_t* d, size_t n)  { return n < 2 ? 0.f : ((d[0] << 8) | d[1]) * 0.079f; }  // kPa
+inline float obdRailGauge(const uint8_t* d, size_t n){ return n < 2 ? 0.f : ((d[0] << 8) | d[1]) * 10.0f; }   // kPa
+inline float obdModVolt(const uint8_t* d, size_t n)  { return n < 2 ? 0.f : ((d[0] << 8) | d[1]) / 1000.0f; } // V
+inline float obdFuelRate(const uint8_t* d, size_t n) { return n < 2 ? 0.f : ((d[0] << 8) | d[1]) / 20.0f; }   // L/h
+
+// id here is the 1-byte OBD-II PID.
+inline constexpr LiveDataParam kObdParams[] = {
+    {0x04, "Calculated engine load",  "%",    obdLoad},
+    {0x05, "Coolant temperature",     "°C",   obdTempA40},
+    {0x06, "Short-term fuel trim B1", "%",    obdFuelTrim},
+    {0x07, "Long-term fuel trim B1",  "%",    obdFuelTrim},
+    {0x0A, "Fuel pressure",           "kPa",  obdFuelPress},
+    {0x0B, "Intake MAP",              "kPa",  obdMap},
+    {0x0C, "Engine RPM",              "rpm",  obdRpm},
+    {0x0D, "Vehicle speed",           "km/h", obdSpeed},
+    {0x0E, "Timing advance",          "°",    obdTiming},
+    {0x0F, "Intake air temperature",  "°C",   obdTempA40},
+    {0x10, "MAF air flow rate",       "g/s",  obdMaf},
+    {0x11, "Throttle position",       "%",    obdLoad},
+    {0x1F, "Run time since start",    "s",    obdU16},
+    {0x21, "Distance with MIL on",    "km",   obdU16},
+    {0x22, "Fuel rail pressure (rel)","kPa",  obdRailRel},
+    {0x23, "Fuel rail gauge pressure","kPa",  obdRailGauge},
+    {0x2C, "Commanded EGR",           "%",    obdLoad},
+    {0x2D, "EGR error",               "%",    obdFuelTrim},
+    {0x2F, "Fuel level",              "%",    obdLoad},
+    {0x31, "Distance since DTC clear","km",   obdU16},
+    {0x33, "Barometric pressure",     "kPa",  obdMap},
+    {0x42, "Control module voltage",  "V",    obdModVolt},
+    {0x46, "Ambient air temperature", "°C",   obdTempA40},
+    {0x5C, "Engine oil temperature",  "°C",   obdTempA40},
+    {0x5E, "Engine fuel rate",        "L/h",  obdFuelRate},
+};
+inline constexpr size_t kObdParamCount = sizeof(kObdParams) / sizeof(kObdParams[0]);
+
+inline const LiveDataParam* findObdParam(uint8_t pid) {
+    for (size_t i = 0; i < kObdParamCount; ++i)
+        if (static_cast<uint8_t>(kObdParams[i].id) == pid) return &kObdParams[i];
+    return nullptr;
+}
+
+// =============================================================================
+// PSA Lexia3 measurement names — UNVERIFIED reference checklist.
+// These are the parameter NAMES Diagbox/Lexia3 shows (docs/lexia3_menu_reference
+// .md §4.1.9). The wire ID and scaling are PSA-proprietary and NOT known here,
+// so decode is null and id is 0: this list is printed by `meas` as a discovery
+// checklist only — it is never queried and never fabricates a value. Fill an
+// entry in (real id + decoder) once it is confirmed on the car via gsniff/raw.
+// =============================================================================
+struct PsaRefParam { const char* name; const char* unit; };
+inline constexpr PsaRefParam kPsaReferenceParams[] = {
+    {"Presence of +IGN (ignition on)", "bool"},
+    {"Ignition key in cranking position", "bool"},
+    {"Engine operating status", "enum"},
+    {"Alternator excitation voltage", "V"},
+    {"Water in diesel", "bool"},
+    {"Fuel sender impedance", "ohm"},
+    {"Displayed fuel level", "L"},
+    {"Gross fuel level", "L"},
+    {"Oil pressure warning", "bool"},
+    {"Measured oil level", "L"},
+    {"Oil temperature", "°C"},
+    {"Load shedding level", "enum"},
+};
+inline constexpr size_t kPsaReferenceParamCount =
+    sizeof(kPsaReferenceParams) / sizeof(kPsaReferenceParams[0]);
+
 } // namespace psa

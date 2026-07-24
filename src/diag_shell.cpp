@@ -104,6 +104,21 @@ bool DiagShell::poll() {
         }
     }
 
+    // Send OBD-II Mode 01 poll if active (no session; single frame on 0x7DF).
+    if (obd_mode_ && can_ && can_->ready(Bus::HighSpeed)) {
+        uint64_t now = get_time_us();
+        if (last_obd_us_ == 0 || now - last_obd_us_ >= 250000) {
+            CanFrame f;
+            f.id = 0x7DF;   // OBD functional request; any powertrain ECU replies
+            f.dlc = 8;
+            f.data[0] = 0x02;      // ISO-TP single frame, 2 data bytes
+            f.data[1] = 0x01;      // service 01 (current data)
+            f.data[2] = obd_pid_;
+            can_->send(Bus::HighSpeed, f);
+            last_obd_us_ = now;
+        }
+    }
+
     // Procedure state machine timeouts
     if (proc_ != Procedure::None && state_ == State::WaitingResponse) {
         uint64_t now = get_time_us();
@@ -126,6 +141,24 @@ bool DiagShell::poll() {
 // --- CAN frame routing -------------------------------------------------------
 
 bool DiagShell::feedDiagFrame(const CanFrame& f) {
+    // Standard OBD-II Mode 01 response (0x7E8..0x7EF, service 0x41). Single
+    // frame, no session — handled before the ECU-session checks below.
+    if (obd_mode_ && f.id >= 0x7E8 && f.id <= 0x7EF && f.dlc >= 3 && f.data[1] == 0x41) {
+        uint8_t pid = f.data[2];
+        if (pid == obd_pid_) {
+            const LiveDataParam* p = findObdParam(pid);
+            if (p && p->decode) {
+                float v = p->decode(&f.data[3], f.dlc - 3u);
+                printf("[OBD] %s: %.2f %s (PID %02X)\n", p->name, v, p->unit, pid);
+            } else {
+                printf("[OBD] PID %02X raw:", pid);
+                for (uint8_t i = 3; i < f.dlc; ++i) printf(" %02X", f.data[i]);
+                printf("\n");
+            }
+        }
+        return true;
+    }
+
     if (!isConnected() || ecu_ == nullptr) return false;
     if (f.id != ecu_->recv_id) return false;
 
@@ -241,6 +274,8 @@ void DiagShell::processLine() {
         cmdStatus();
     } else if (strcmp(cmd, "meas") == 0) {
         cmdMeas(arg);
+    } else if (strcmp(cmd, "obd") == 0) {
+        cmdObd(arg);
     } else if (strcmp(cmd, "service") == 0) {
         cmdService(arg);
     } else if (strcmp(cmd, "program") == 0) {
@@ -293,6 +328,7 @@ void DiagShell::cmdHelp() {
         "  status                Show connection status\n"
         "  meas <param_id>       Start measurement polling\n"
         "  meas off              Stop measurement polling\n"
+        "  obd [pid|off]         Standard OBD-II Mode 01 poll (e.g. obd 0C = RPM)\n"
         "  service reset         Reset maintenance indicator\n"
         "  service schedule K M  Set maintenance (km / months)\n"
         "  program key           Enter key learning mode\n"
@@ -1940,6 +1976,13 @@ void DiagShell::cmdMeas(const char* arg) {
         for (const auto& p : kUdsParams) {
             printf("  %04X: %s (%s)\n", p.id, p.name, p.unit);
         }
+        printf("\n[PSA Lexia3 reference — UNVERIFIED, ID/scaling unknown, not queryable]\n");
+        printf("  (discover the real ID on the car via gsniff/raw, then add to live_data.hpp)\n");
+        for (size_t i = 0; i < kPsaReferenceParamCount; ++i) {
+            printf("  --.-- : %s (%s)\n",
+                   kPsaReferenceParams[i].name, kPsaReferenceParams[i].unit);
+        }
+        printf("\nStandard OBD-II Mode 01: use 'obd' (real, engine ECU).\n");
         return;
     }
 
@@ -1975,6 +2018,37 @@ void DiagShell::cmdMeas(const char* arg) {
     live_param_id_ = param_id;
     live_polling_active_ = true;
     last_poll_us_ = 0;
+}
+
+void DiagShell::cmdObd(const char* arg) {
+    if (!*arg) {
+        printf("Standard OBD-II Mode 01 PIDs (SAE J1979, engine on 500k HS bus):\n");
+        for (size_t i = 0; i < kObdParamCount; ++i)
+            printf("  %02X: %s (%s)\n", static_cast<uint8_t>(kObdParams[i].id),
+                   kObdParams[i].name, kObdParams[i].unit);
+        printf("Usage: obd <pid_hex>  |  obd off\n");
+        return;
+    }
+    if (strcmp(arg, "off") == 0) {
+        obd_mode_ = false;
+        printf("[OBD] Polling stopped.\n");
+        return;
+    }
+    if (!can_ || !can_->ready(Bus::HighSpeed)) {
+        printf("[OBD] HS bus not available.\n");
+        return;
+    }
+    uint16_t pid16 = 0;
+    if (!parseHexU16(arg, nullptr, &pid16) || pid16 > 0xFF) {
+        printf("[OBD] Invalid PID (expect 1-2 hex digits): '%s'\n", arg);
+        return;
+    }
+    obd_pid_ = static_cast<uint8_t>(pid16);
+    obd_mode_ = true;
+    last_obd_us_ = 0;
+    const LiveDataParam* p = findObdParam(obd_pid_);
+    printf("[OBD] Polling PID %02X (%s) on 0x7DF every 250ms. 'obd off' to stop.\n",
+           obd_pid_, p ? p->name : "unknown/raw");
 }
 
 // --- Bus selection helper ----------------------------------------------------

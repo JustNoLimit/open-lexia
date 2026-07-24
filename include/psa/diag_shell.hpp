@@ -78,6 +78,7 @@ private:
     void cmdIdent();
     void cmdStatus();
     void cmdMeas(const char* arg);
+    void cmdObd(const char* arg);
     void cmdService(const char* arg);
     void cmdProgram(const char* arg);
     void cmdEsp(const char* arg);
@@ -131,6 +132,10 @@ private:
     bool            live_polling_active_ = false;
     uint16_t        live_param_id_ = 0;
     uint64_t        last_poll_us_ = 0;
+    // Standard OBD-II Mode 01 polling (single-frame, no session, HS bus).
+    bool            obd_mode_ = false;
+    uint8_t         obd_pid_ = 0;
+    uint64_t        last_obd_us_ = 0;
 
     // --- Keep-alive timer ---
     uint64_t  last_keepalive_us_ = 0;
