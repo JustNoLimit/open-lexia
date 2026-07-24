@@ -18,6 +18,7 @@
 #include "psa/diag_shell.hpp"
 #include "psa/ecu_keys.hpp"
 #include "psa/live_data.hpp"
+#include "psa/dtc_text.hpp"
 #include "psa/flash_engine.hpp"
 #include "psa/can_sniffer.hpp"
 #include <vector>
@@ -861,8 +862,27 @@ static void test_flash_shell_srecord_staging() {
     printf("  flash_shell: S-record staging OK\n");
 }
 
+static void test_dtc_text() {
+    using namespace psa;
+    char b[6];
+    // Algorithmic J2012 decode across all four category letters.
+    assert(strcmp(formatDtcCode(0x0140, b), "P0140") == 0);
+    assert(strcmp(formatDtcCode(0x0300, b), "P0300") == 0);
+    assert(strcmp(formatDtcCode(0x1234, b), "P1234") == 0); // mfr-specific P
+    assert(strcmp(formatDtcCode(0x4567, b), "C0567") == 0); // C: bits15-14=01
+    assert(strcmp(formatDtcCode(0x8ABC, b), "B0ABC") == 0); // B: bits15-14=10
+    assert(strcmp(formatDtcCode(0xC100, b), "U0100") == 0); // U: bits15-14=11
+    // Descriptions: known generic codes resolve, unknown returns nullptr.
+    assert(dtcDescription(0x0140) != nullptr);
+    assert(strstr(dtcDescription(0x0300), "misfire") != nullptr);
+    assert(dtcDescription(0xC101) != nullptr);          // U0101
+    assert(dtcDescription(0x0ABC) == nullptr);          // not in table
+    printf("  dtc_text: J2012 decode + generic description lookup OK\n");
+}
+
 int main() {
     printf("psa self-check\n");
+    test_dtc_text();
     test_diag_shell_state();
     test_seedkey_determinism();
     test_seedkey_known_vector();

@@ -3,6 +3,7 @@
 #include "psa/diag_shell.hpp"
 #include "psa/ecu_keys.hpp"
 #include "psa/live_data.hpp"
+#include "psa/dtc_text.hpp"
 #include "psa/flash_engine.hpp"
 #include "psa/ecu_zones.hpp"
 #include <cstdio>
@@ -1361,7 +1362,11 @@ void DiagShell::printDtcKwp(const uint8_t* pdu, size_t len) {
         uint16_t dtc_code = (pdu[pos] << 8) | pdu[pos + 1];
         uint8_t status = (pos + 2 < len) ? pdu[pos + 2] : 0;
         const char* st = (status & 0x80) ? "ACTIVE" : "STORED";
-        printf("  DTC %04X - %s (status: %02X)\n", dtc_code, st, status);
+        char code_str[6];
+        formatDtcCode(dtc_code, code_str);
+        const char* desc = dtcDescription(dtc_code);
+        printf("  DTC %04X - %s (status: %02X) \xE2\x80\x94 %s: %s\n",
+               dtc_code, st, status, code_str, desc ? desc : "(no description)");
         pos += 3;
     }
 }
@@ -1376,7 +1381,15 @@ void DiagShell::printDtcUds(const uint8_t* pdu, size_t len) {
         uint32_t dtc = (pdu[pos] << 16) | (pdu[pos + 1] << 8) | pdu[pos + 2];
         uint8_t status = pdu[pos + 3];
         const char* st = (status & 0x01) ? "ACTIVE" : "STORED";
-        printf("  DTC %06X - %s (status: %02X)\n", static_cast<unsigned>(dtc), st, status);
+        // UDS DTC = 2-byte J2012 code + 1 failure-type byte (FTB).
+        uint16_t code16 = static_cast<uint16_t>(dtc >> 8);
+        uint8_t  ftb    = static_cast<uint8_t>(dtc & 0xFF);
+        char code_str[6];
+        formatDtcCode(code16, code_str);
+        const char* desc = dtcDescription(code16);
+        printf("  DTC %06X - %s (status: %02X) \xE2\x80\x94 %s.%02X: %s\n",
+               static_cast<unsigned>(dtc), st, status, code_str, ftb,
+               desc ? desc : "(no description)");
         pos += 4;
         count++;
     }

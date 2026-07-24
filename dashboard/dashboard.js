@@ -1038,8 +1038,9 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
 
     // DTCs
     if (/Reading fault codes from/.test(t)) { st.dtcs = []; renderDtc(); return; }
-    if ((m = t.match(/DTC ([0-9A-Fa-f]+) - (\w+) \(status: ([0-9A-Fa-f]+)\)/))) {
-      st.dtcs.push({ code: m[1].toUpperCase(), state: m[2], status: m[3].toUpperCase() });
+    if ((m = t.match(/DTC ([0-9A-Fa-f]+) - (\w+) \(status: ([0-9A-Fa-f]+)\)(?:\s*—\s*(\S+):\s*(.*))?/))) {
+      st.dtcs.push({ code: m[1].toUpperCase(), state: m[2], status: m[3].toUpperCase(),
+                     label: m[4] || "", desc: (m[5] || "").trim() });
       renderDtc();
       if (st.ecu) setEcuStatus(st.ecu, "dtc", st.dtcs.length);
       return;
@@ -1109,7 +1110,9 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     if (!st.dtcs.length) { b.innerHTML = '<tr><td class="muted" colspan="3">No faults.</td></tr>'; return; }
     b.innerHTML = st.dtcs.map(function (d) {
       var pill = d.state === "ACTIVE" ? '<span class="pill active">ACTIVE</span>' : '<span class="pill stored">STORED</span>';
-      return '<tr><td class="code">' + d.code + '</td><td class="muted">fault ' + d.code + '</td><td>' + pill + ' <span class="muted">0x' + d.status + '</span></td></tr>';
+      var label = d.label || d.code;
+      var desc = d.desc || ("fault " + d.code);
+      return '<tr><td class="code">' + label + '</td><td class="muted">' + desc + '</td><td>' + pill + ' <span class="muted">0x' + d.status + '</span></td></tr>';
     }).join("");
   }
   // ---- guided sniffer ----
