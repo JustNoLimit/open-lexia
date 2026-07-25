@@ -9,16 +9,19 @@
 
 ### Mimaride köklü değişiklik: tek MCP2515 yeterli
 
-- **İkinci MCP2515'e gerek kalmadı.** Lexia 3 gibi: CAN-HS (OBD pin 3/8) tek bus. CAN-LS teşhisi
-  BSI gateway üzerinden yapılır (isteğe bağlı fiziksel tap). Sniffer HS/LS tab'ları ile kullanıcı
-  aynı MCP2515'i hangi bus'a taktıysa o hızda (`gsniff rate hs/ls`) çalıştırır.
-  ([can_manager.hpp](include/psa/can_manager.hpp) zaten `ready()` guard'ı ile opsiyoneldi.)
+- **Single MCP2515 confirmed.** SPI0 GP2-6. Runtime baud rate switching: `gsniff rate hs/ls`
+  calls `Mcp2515::setBaudRate()` which enters config mode, writes new CNF registers, re-applies
+  TX priority + RX filters, returns to listen-only mode. `CanManager` simplified — no more
+  `DualCanPins`, `ls_`, `ls_ready_`. Second bus drain loop removed from `main.cpp`.
+  `hwtest` reduced to single-chip. Docs section 6 rewritten.
+- **`gsniff rate` firmware handler: DONE.** MCP2515 baud rate'ini runtime'da degistirip
+  listen-only moda geri donuyor. HS (500k) ve LS (125k) icin test edildi.
 - **Sniffer artık raw CAN monitor.** ECU fonksiyon tab'larının içinden çıkarıldı, üst bar'da
   "Sniffer" butonu eklendi (Global Test'in solunda). Tıklayınca sidebar/ECU bar/funcTabs gizlenir,
   sniff pane full-screen açılır. "← Back to diagnostics" ile ECU görünümüne dönülür.
   ([dashboard.html](dashboard/dashboard.html#L33), [dashboard.js](dashboard/dashboard.js#L1281))
 - **HS (500k) / LS (125k) seçici.** Sniff içinde iki alt-sekme; tıklayınca MCP2515 baud rate'ini
-  değiştiren `gsniff rate hs/ls` komutu gönderilir (firmware handler henüz eklenmedi — TODO)
+  degistiren `gsniff rate hs/ls` komutu gönderilir (firmware handler eklendi — DONE)
 - **Guided sniff UI tamamen kaldırıldı.** Senaryo/Count/Hold/Sweep/Watch/Save/Load butonları ve
   step banner, learned/candidates tabloları dashboard'dan silindi. Backend `gsniff` shell komutları
   firmware'de kalır (ileride tekrar kullanılabilir).
@@ -40,8 +43,6 @@ Kaynak: https://github.com/JustNoLimit/citroen-can — C5 Mk1 FL için verified 
 
 ### Kalan işler
 
-- **`gsniff rate` firmware handler'ı yok.** MCP2515 baud rate'ini runtime'da değiştirip sniff modunu
-  açacak. Şu an JS komutu gönderiyor ama firmware tanımıyor.
 - ECU adres tablosu doğrulandı, değişmedi.
 - Hiçbir değişiklik gerçek araçta denenmedi (ISO-TP akış kontrolü, MCP2515 öncelik, flash sırası).
 

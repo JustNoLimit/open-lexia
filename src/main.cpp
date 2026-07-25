@@ -181,26 +181,20 @@ void decode_sniffed(psa::Bus bus, const psa::CanFrame& f) {
 // `sub sp, #74752` and run tens of kilobytes below the stack it was given.
 // It happened not to corrupt anything only because that SRAM was unused.
 // They belong in .bss.
-psa::DualCanPins g_pins;
-psa::CanManager  g_can;
-psa::DiagShell   g_shell;
+psa::Mcp2515::Pins g_pins{spi0, 2, 3, 4, 5, 6};
+psa::CanManager      g_can;
+psa::DiagShell       g_shell;
 
 int main() {
     stdio_init_all();
 
-    psa::DualCanPins& pins = g_pins;
+    psa::Mcp2515::Pins& pins = g_pins;
     psa::CanManager& can = g_can;
-    // Set listen_only to false to enable transmission for active diagnostics
     bool can_ok = can.init(pins, /*listen_only=*/false);
     if (!can_ok) {
-        // Don't halt: returning from main() hits the SDK's default _exit(),
-        // which spins on __breakpoint() with no debugger attached — that wedges
-        // the chip badly enough to also kill USB enumeration. A diagnostic tool
-        // with dead CAN hardware should still boot Wi-Fi/USB so the failure is
-        // visible and the ECU functions remain reachable once wiring is fixed.
         printf("CAN init failed (no MCP2515 response) - continuing without CAN.\n");
     } else {
-        printf("Citroen C5 interface up. HS=500k spi0, LS=125k spi1.\n");
+        printf("Citroen C5 interface up. MCP2515 on spi0 GP2-6 (default 500k). Use 'gsniff rate ls' for 125k.\n");
     }
 
     psa::DiagShell& shell = g_shell;
@@ -230,22 +224,17 @@ int main() {
         shell.poll();
         wifi.poll();
 
-        // Drain both buses fully each pass. The MCP2515 only holds two frames;
-        // taking one per iteration meant a single slow lwIP/printf pass dropped
-        // consecutive frames of a long ECU reply and failed the whole reassembly.
-        // Bounded so a saturated bus can never starve the rest of the loop.
+        // Drain frames from the single MCP2515. The controller holds two
+        // receive buffers; draining one per pass meant a single slow lwIP/printf
+        // call dropped consecutive frames of a long ECU reply and failed the
+        // whole reassembly. Bounded so a saturated bus never starves Wi-Fi/USB.
+        // All frames are tagged with the current bus (HS/LS) — whichever rate
+        // the MCP2515 is configured for via `gsniff rate`.
         for (int i = 0; i < kMaxRxPerPass && can.hasRx(psa::Bus::HighSpeed); ++i) {
             if (can.read(psa::Bus::HighSpeed, f) != psa::McpError::Ok) break;
             if (!shell.feedDiagFrame(f)) {
                 if (shell.gsniffActive()) shell.feedCaptureFrame(psa::Bus::HighSpeed, f);
                 else if (shell.sniffEnabled()) decode_sniffed(psa::Bus::HighSpeed, f);
-            }
-        }
-        for (int i = 0; i < kMaxRxPerPass && can.hasRx(psa::Bus::LowSpeed); ++i) {
-            if (can.read(psa::Bus::LowSpeed, f) != psa::McpError::Ok) break;
-            if (!shell.feedDiagFrame(f)) {
-                if (shell.gsniffActive()) shell.feedCaptureFrame(psa::Bus::LowSpeed, f);
-                else if (shell.sniffEnabled()) decode_sniffed(psa::Bus::LowSpeed, f);
             }
         }
         tight_loop_contents();

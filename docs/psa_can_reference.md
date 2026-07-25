@@ -44,11 +44,11 @@ following open-source PSA/Stellantis projects and forums:
 
 The C5 Mk1 FL has **two CAN buses** plus a diagnostic access point:
 
-| Bus | PSA name | Speed | MPC2515 slot | Content |
-|---|---|---|---|---|
-| **CAN-HS** | IS / "High Speed" / "Car" | **500 kbps** | MCP2515 #1 (SPI0) | Engine, ABS, gearbox, steering, suspension, instrument panel, alerts |
-| **CAN-LS** | HAB / "Comfort" / "Low Speed" / "Entertainment" | **125 kbps** | MCP2515 #2 (SPI1) | BSI comfort, climate, radio/nav, steering-wheel buttons, VIN, clock, dash dimming |
-| **Diagnostic** | OBD2 (AEE2004) | 500 kbps (shares IS) | via CAN-HS node | KWP2000/UDS diagnostic frames, OBD2 pins **3 (CAN-H)** and **8 (CAN-L)** |
+| Bus | PSA name | Speed | Content |
+|---|---|---|---|
+| **CAN-HS** | IS / "High Speed" / "Car" | **500 kbps** | Engine, ABS, gearbox, steering, suspension, instrument panel, alerts |
+| **CAN-LS** | HAB / "Comfort" / "Low Speed" / "Entertainment" | **125 kbps** | BSI comfort, climate, radio/nav, steering-wheel buttons, VIN, clock, dash dimming |
+| **Diagnostic** | OBD2 (AEE2004) | 500 kbps (shares IS) | KWP2000/UDS diagnostic frames, OBD2 pins **3 (CAN-H)** and **8 (CAN-L)** |
 
 Notes:
 - On **AEE2004 / AEE2010** vehicles (C5 Mk1 FL = AEE2004), the diagnostic CAN is on
@@ -393,43 +393,37 @@ driver default is 10 MHz. Keep SPI clock <= Fosc of the MCP2515 to be safe.
 
 ---
 
-## 6. Dual MCP2515 on Raspberry Pi Pico 2 W (RP2350)
+## 6. Single MCP2515 with runtime baud rate switching (RP2350)
 
-The RP2350 (like the RP2040) exposes **two independent SPI peripherals**, `spi0` and
-`spi1`, each routable to several GPIO banks through the IO mux. Putting one MCP2515
-on each peripheral gives **zero bus contention** (no CS scheduling, no shared-clock
-glitches) and lets both be serviced at full SPI speed simultaneously.
+A single MCP2515 on `spi0` handles both CAN-HS (500 kbps) and CAN-LS (125 kbps).
+The `gsniff rate hs/ls` command reconfigures the chip's CNF registers at runtime via
+`Mcp2515::setBaudRate()`, entering configuration mode, writing new timing, and
+returning to listen-only mode. The user physically moves the MCP2515's CAN-H/CAN-L
+wires between the two buses (OBD2 pins 3/8 for HS, BSI connector for LS).
 
-### 6.1 Recommended pin assignment (no conflict)
+This replaces the original dual-MCP2515 design with no loss of functionality: a
+diagnostic tool only talks to one bus at a time, and the sniffer switches between
+HS/LS tabs in the dashboard just as before.
 
-| Signal | MCP2515 #1 (CAN-HS, 500 kbps) | MCP2515 #2 (CAN-LS, 125 kbps) |
-|---|---|---|
-| SPI peripheral | `spi0` | `spi1` |
-| SCK  | GP2  | GP10 |
-| MOSI | GP3  | GP11 |
-| MISO | GP4  | GP12 |
-| CS   | GP5  | GP13 |
-| INT  | GP6  | GP14 |
-| (optional) RESET | GP7 | GP15 |
+### 6.1 Pin assignment
 
-Why these pins: GP2-GP5 are the canonical `spi0` Tx/Rx/Sck/Csn on the Pico pinout,
-and GP10-GP13 are the canonical `spi1` set. They share no GPIO, no IRQ line, and
-leave GP0/GP1 free for UART debug and the USB/LED lines untouched. INT pins use
-separate GPIO so each MCP2515's RX interrupt can be handled independently (the
-RP2350 supports edge-triggered GPIO IRQs on any pin).
+| Signal | MCP2515 |
+|---|---|
+| SPI peripheral | `spi0` |
+| SCK  | GP2  |
+| MOSI | GP3  |
+| MISO | GP4  |
+| CS   | GP5  |
+| INT  | GP6  |
 
-### 6.2 Pico SDK notes
+GP2-GP5 are the canonical `spi0` pins on the Pico pinout. INT uses GP6 with
+pull-up (MCP2515 INT is active-low). GP0/GP1 remain free for UART debug.
 
-- Initialise each SPI with `spi_init(spi0, 8'000'000)` / `spi_init(spi1, 8'000'000)`,
-  `spi_set_format(spi, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST)`.
-- `gpio_set_function(pin, GPIO_FUNC_SPI)` for SCK/MOSI/MISO; `gpio_init` + pull-up
-  on CS; `gpio_set_dir_in` + `gpio_set_irq_enabled_with_callback` on INT.
-- The RP2350 has two cores; a clean split is **core 0 = USB/UART command interface +
-  diagnostic state machine**, **core 1 = CAN RX pump** (poll both MCP2515 INT pins,
-  push frames into a SPSC ring buffer). This mirrors ludwig-v's `readCAN`/`parseCAN`
-  thread split but with hardware concurrency instead of `ThreadController`.
-- MCP2515 RESET can be done in software via the `INSTRUCTION_RESET` (0xC0) SPI
-  command; a hard-wired RESET GPIO is optional but speeds cold-boot recovery.
+### 6.2 Runtime baud rate change
+
+`Mcp2515::setBaudRate(CanBitrate)` enters REQOP_CONFIG, writes CNF1/CNF2/CNF3
+presets (0x00 0x90 0x82 for 500k, 0x01 0xB1 0x85 for 125k), re-applies TX priority
+and RX filters, then returns to listen-only mode. No hardware reset required.
 
 ### 6.3 Filter strategy for sniffing
 
@@ -449,7 +443,7 @@ For a **sniffer**, set both RX buffers to accept all standard frames:
 | ISO-TP transport (sec. 4.1) | `include/psa/isotp.hpp` + `src/isotp.cpp` |
 | Seed/key (sec. 4.4) | `include/psa/psa_protocol.hpp` — `seed_key::compute` |
 | MCP2515 CNF presets (sec. 5) | `include/psa/mcp2515.hpp` + `src/mcp2515.cpp` |
-| Dual-SPI wiring (sec. 6) | `include/psa/can_manager.hpp` + `src/can_manager.cpp` |
+| Single-SPI wiring (sec. 6) | `include/psa/can_manager.hpp` + `src/can_manager.cpp` |
 | Sniffer + diag passthrough | `src/main.cpp` |
 
 Extensibility hooks (explicitly requested): new ECU = add a row to `kEcuTable`;

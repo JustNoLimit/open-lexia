@@ -1,5 +1,6 @@
-// Dual-MCP2515 manager: CAN-HS (500k, spi0) + CAN-LS (125k, spi1).
-// Zero bus contention: each MCP2515 on its own SPI peripheral.
+// Single-MCP2515 CAN manager with runtime baud rate switching.
+// One MCP2515 (spi0, GP2-6) handles both CAN-HS (500k) and CAN-LS (125k) —
+// the physical wire is moved between buses and `gsniff rate hs/ls` matches the baud rate.
 // Reference: docs/psa_can_reference.md section 6.
 #pragma once
 #include <cstdint>
@@ -10,59 +11,47 @@ namespace psa {
 
 #ifdef HOST_TEST
 inline spi_inst_t* const spi0 = nullptr;
-inline spi_inst_t* const spi1 = nullptr;
 #endif
 
 enum class Bus : uint8_t { HighSpeed, LowSpeed };
 
-// Hardware pin map (Pico 2 W / RP2350) — see docs section 6.1.
-struct DualCanPins {
-    Mcp2515::Pins hs{spi0, 2, 3, 4, 5, 6};   // GP2 SCK, GP3 MOSI, GP4 MISO, GP5 CS, GP6 INT
-    Mcp2515::Pins ls{spi1, 10, 11, 12, 13, 14}; // GP10..GP14
-};
-
 class CanManager {
 public:
-    bool init(const DualCanPins& pins, bool listen_only);
+    bool init(const Mcp2515::Pins& pins, bool listen_only);
     bool hasRx(Bus b) const;
     McpError read(Bus b, CanFrame& out);
     McpError send(Bus b, const CanFrame& f);
-    // Whether this bus's MCP2515 answered during init(). A bus with no chip
-    // wired up must never be touched again — its SPI peripheral can wedge
-    // (spi_write_blocking spins forever) once Wi-Fi/cyw43 comes up.
-    bool ready(Bus b) const { return b == Bus::HighSpeed ? hs_ready_ : ls_ready_; }
+    // Single chip: ready if the MCP2515 answered at init(). The Bus parameter
+    // is kept so all existing callers still compile; both values return the
+    // same answer because there is only one controller.
+    bool ready(Bus) const { return can_ready_; }
 
-    // Raw controller access for hardware diagnostics. Returns nullptr for a bus
-    // whose chip never answered, so a caller physically cannot reach around the
-    // ready() guard and wedge the SPI peripheral — hwtest used to do exactly
-    // that, hanging the main loop on the very hardware it exists to diagnose.
-    Mcp2515* bus(Bus b) {
-        if (!ready(b)) return nullptr;
-        return b == Bus::HighSpeed ? &hs_ : &ls_;
+    // Raw controller access for hardware diagnostics. Returns nullptr if the
+    // chip never answered, so a caller cannot wedge the SPI peripheral.
+    Mcp2515* bus(Bus) {
+        if (!can_ready_) return nullptr;
+        return &can_;
     }
 
-    // Latched controller error flags for a bus (0 if the bus is not ready).
-    uint8_t errorFlags(Bus b) {
-        Mcp2515* m = bus(b);
-        return m ? m->errorFlags() : 0;
+    // Latched controller error flags (0 if the chip is not ready).
+    uint8_t errorFlags(Bus) {
+        if (!can_ready_) return 0;
+        return can_.errorFlags();
     }
 
-    // Reconfigure a bus's bitrate at runtime and return to listen-only mode.
-    // Returns false if the bus is not ready or reconfiguration fails.
+    // Runtime baud rate change: enters config mode, writes CNF registers,
+    // re-applies TX priority and RX filters, returns to listen-only mode.
 #ifndef HOST_TEST
-    bool reconfigureBus(Bus bus, CanBitrate rate) {
-        if (!ready(bus)) return false;
-        Mcp2515* m = bus == Bus::HighSpeed ? &hs_ : &ls_;
-        return m->setBaudRate(rate) == McpError::Ok;
+    bool reconfigureBus(Bus, CanBitrate rate) {
+        if (!can_ready_) return false;
+        return can_.setBaudRate(rate) == McpError::Ok;
     }
 #else
     bool reconfigureBus(Bus, CanBitrate) { return false; }
 #endif
 private:
-    Mcp2515 hs_;
-    Mcp2515 ls_;
-    bool hs_ready_ = false;
-    bool ls_ready_ = false;
+    Mcp2515 can_;
+    bool    can_ready_ = false;
 };
 
 } // namespace psa
