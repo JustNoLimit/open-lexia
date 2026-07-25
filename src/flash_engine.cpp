@@ -93,12 +93,23 @@ bool SRecordParser::parseLine(const char* line, SRecord& out) {
         out.address = (out.address << 8) | buf[i];
     }
 
-    // Parse data
-    out.data_len = byte_count - addr_len - 1;
+    // Parse data. A record that carries more than one TransferData request can
+    // hold is refused outright — truncating it would flash a partial block and
+    // leave a gap in the ECU image, which is worse than not flashing at all.
+    size_t data_len = byte_count - addr_len - 1;
+    if (data_len > sizeof(out.data)) return false;
+    out.data_len = static_cast<uint8_t>(data_len);
     std::memcpy(out.data, buf + addr_len, out.data_len);
     out.valid = true;
 
     return true;
+}
+
+bool SRecordParser::isDataRecord(uint8_t type) {
+    // Only S1/S2/S3 carry firmware bytes. S0 is a header, S5/S6 are record
+    // counts, S7/S8/S9 are start addresses — flashing any of them would push
+    // metadata into the ECU as if it were code.
+    return type == 1 || type == 2 || type == 3;
 }
 
 // --- CRC Checksum ------------------------------------------------------------
@@ -123,6 +134,9 @@ uint16_t FlashChecksum::crc16_x25(const uint8_t* data, size_t len, uint16_t pres
 void FlashEngine::init(Protocol proto) {
     proto_ = proto;
     step_ = Step::Idle;
+    max_block_ = 0;
+    dl_addr_ = 0;
+    dl_size_ = 0;
 }
 
 Req FlashEngine::nextRequest(const SRecord& rec, uint8_t block_sequence_counter) {
@@ -152,43 +166,55 @@ Req FlashEngine::nextRequest(const SRecord& rec, uint8_t block_sequence_counter)
             }
             break;
 
-        case Step::RequestDownload:
+        case Step::RequestDownload: {
             step_ = Step::TransferData;
+            // The caller stages the whole image before we get here, so announce
+            // its real extent. Fall back to the current record's address only if
+            // nobody called setDownloadExtent().
+            uint32_t addr = dl_size_ ? dl_addr_ : rec.address;
+            uint32_t size = dl_size_ ? dl_size_ : rec.data_len;
             if (proto_ == Protocol::UDS) {
                 // UDS: 34 (compression/encryption = 00) (addrFormat/sizeFormat = 44) (addr 4B) (size 4B)
                 r.buf[0] = 0x34;
                 r.buf[1] = 0x00;
                 r.buf[2] = 0x44; // 4-byte address, 4-byte size
-                r.buf[3] = static_cast<uint8_t>(rec.address >> 24);
-                r.buf[4] = static_cast<uint8_t>(rec.address >> 16);
-                r.buf[5] = static_cast<uint8_t>(rec.address >> 8);
-                r.buf[6] = static_cast<uint8_t>(rec.address & 0xFF);
-                // Size: just dummy size of 64KB for now or rec size
-                r.buf[7] = 0x00;
-                r.buf[8] = 0x01;
-                r.buf[9] = 0x00;
-                r.buf[10] = 0x00;
+                r.buf[3] = static_cast<uint8_t>(addr >> 24);
+                r.buf[4] = static_cast<uint8_t>(addr >> 16);
+                r.buf[5] = static_cast<uint8_t>(addr >> 8);
+                r.buf[6] = static_cast<uint8_t>(addr & 0xFF);
+                r.buf[7] = static_cast<uint8_t>(size >> 24);
+                r.buf[8] = static_cast<uint8_t>(size >> 16);
+                r.buf[9] = static_cast<uint8_t>(size >> 8);
+                r.buf[10] = static_cast<uint8_t>(size & 0xFF);
                 r.len = 11;
             } else {
-                // KWP RequestDownload: 34 (addr 3B) (size 3B)
+                // KWP RequestDownload: 34 (addr 3B) (compression) (size 2B)
                 r.buf[0] = 0x34;
-                r.buf[1] = static_cast<uint8_t>(rec.address >> 16);
-                r.buf[2] = static_cast<uint8_t>(rec.address >> 8);
-                r.buf[3] = static_cast<uint8_t>(rec.address & 0xFF);
+                r.buf[1] = static_cast<uint8_t>(addr >> 16);
+                r.buf[2] = static_cast<uint8_t>(addr >> 8);
+                r.buf[3] = static_cast<uint8_t>(addr & 0xFF);
                 r.buf[4] = 0x00; // compression
-                r.buf[5] = 0x01; // size hi
-                r.buf[6] = 0x00; // size lo
+                r.buf[5] = static_cast<uint8_t>(size >> 8);
+                r.buf[6] = static_cast<uint8_t>(size & 0xFF);
                 r.len = 7;
             }
             break;
+        }
 
-        case Step::TransferData:
-            // Send the S-record payload
+        case Step::TransferData: {
+            // Send the S-record payload. The parser already refuses anything
+            // larger than kMaxFlashBlock, and the ECU's own maxNumberOfBlockLength
+            // (learned from the RequestDownload reply) caps it further; clamp
+            // here too so no future caller can walk off the end of buf.
+            size_t cap = sizeof(r.buf) - 2;
+            if (max_block_ != 0 && max_block_ < cap) cap = max_block_;
+            size_t n = (rec.data_len < cap) ? rec.data_len : cap;
             r.buf[0] = 0x36;
             r.buf[1] = block_sequence_counter;
-            std::memcpy(r.buf + 2, rec.data, rec.data_len);
-            r.len = 2 + rec.data_len;
+            std::memcpy(r.buf + 2, rec.data, n);
+            r.len = static_cast<uint8_t>(2 + n);
             break;
+        }
 
         case Step::RequestTransferExit:
             step_ = Step::VerifyChecksum;
@@ -228,8 +254,18 @@ void FlashEngine::handleResponse(uint8_t service, const uint8_t* pdu, size_t len
             }
             break;
         case Step::RequestDownload:
-            // Positive response to 0x34: 0x76 (UDS) or similar
+            // Positive response to 0x34: 0x74/0x76 carrying
+            // lengthFormatIdentifier + maxNumberOfBlockLength. That length
+            // includes the 0x36 service and sequence bytes, so subtract them.
             if (service != 0x7F) {
+                if (len >= 2) {
+                    size_t nbytes = pdu[1] >> 4;          // high nibble = byte count
+                    if (nbytes > 0 && nbytes <= 4 && len >= 2 + nbytes) {
+                        size_t maxlen = 0;
+                        for (size_t i = 0; i < nbytes; ++i) maxlen = (maxlen << 8) | pdu[2 + i];
+                        max_block_ = (maxlen > 2) ? (maxlen - 2) : 0;
+                    }
+                }
                 step_ = Step::TransferData;
             }
             break;

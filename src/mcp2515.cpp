@@ -98,6 +98,14 @@ McpError Mcp2515::init(CanBitrate br) {
     writeReg(MCP_CNF2, cnf.c2);
     writeReg(MCP_CNF3, cnf.c3);
 
+    // Descending transmit priority: TXB0 > TXB1 > TXB2. At the reset value all
+    // three sit at the same priority, and the datasheet then transmits the
+    // HIGHEST-numbered buffer first — which reversed the consecutive frames of
+    // every multi-frame ISO-TP request and made the ECU reject it.
+    bitMod(MCP_TXB0CTRL, 0x03, 0x03);
+    bitMod(MCP_TXB1CTRL, 0x03, 0x02);
+    bitMod(MCP_TXB2CTRL, 0x03, 0x01);
+
     // RX interrupts on, roll-over RXB0 -> RXB1
     writeReg(MCP_CANINTE, CANINTF_RX0IF | CANINTF_RX1IF);
     bitMod(MCP_RXB0CTRL, RXBnCTRL_RXM_MASK | RXB0CTRL_BUKT,
@@ -117,6 +125,19 @@ void Mcp2515::setSnifferFilters() {
         (Reg)0x00,(Reg)0x04,(Reg)0x08,(Reg)0x10,(Reg)0x14,(Reg)0x18
     };
     for (Reg r : filt) writeBytes(r, zeros, 4);
+}
+
+uint8_t Mcp2515::errorFlags() { return readReg(MCP_EFLG); }
+
+void Mcp2515::recoverBus() {
+    // ABAT aborts every pending transmission; it must be released again or the
+    // next RTS is aborted too. RX-overflow bits are latched and have to be
+    // cleared by hand, otherwise the buffers stay marked full forever.
+    bitMod(MCP_CANCTRL, 0x10, 0x10);
+    bitMod(MCP_CANCTRL, 0x10, 0x00);
+    static constexpr Reg tx_ctrl[3] = { MCP_TXB0CTRL, MCP_TXB1CTRL, MCP_TXB2CTRL };
+    for (Reg r : tx_ctrl) bitMod(r, 0x08, 0x00);      // clear TXREQ
+    bitMod(MCP_EFLG, EFLG_RX0OVR | EFLG_RX1OVR, 0x00);
 }
 
 McpError Mcp2515::setNormalMode()     { return setMode(REQOP_NORMAL); }
@@ -153,7 +174,7 @@ McpError Mcp2515::read(CanFrame& out) {
         id = (id << 8) | hdr[2];
         id = (id << 8) | hdr[3];
     }
-    out.id  = static_cast<uint16_t>(id);
+    out.id  = id;
     out.ext = ext;
     out.dlc = hdr[4] & 0x0F;
     if (out.dlc > 8) out.dlc = 8;
@@ -172,7 +193,14 @@ McpError Mcp2515::send(const CanFrame& f) {
     int idx = -1;
     for (int i = 0; i < 3; ++i)
         if ((readReg(ctrl[i]) & 0x08) == 0) { idx = i; break; }  // TXREQ == 0
-    if (idx < 0) return McpError::AllTxBusy;
+    if (idx < 0) {
+        // Every buffer still latched. Either the bus is saturated, or — far more
+        // likely on a bench or with the ignition off — nothing is acknowledging
+        // us, so TXREQ never clears and the transmitter would stay dead until a
+        // power cycle. Clear the queue once the chip admits it has given up.
+        if (errorFlags() & (EFLG_TXBO | EFLG_TXEP)) recoverBus();
+        return McpError::AllTxBusy;
+    }
 
     uint8_t buf[5];
     if (f.ext) {

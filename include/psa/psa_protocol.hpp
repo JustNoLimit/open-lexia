@@ -140,7 +140,9 @@ inline constexpr uint8_t RequestOutOfRange         = 0x31;
 inline constexpr uint8_t RequestSequenceError      = 0x24;
 inline constexpr uint8_t ExceededAttempts          = 0x36;
 inline constexpr uint8_t RequiredTimeDelayExpired  = 0x37;
-inline constexpr uint8_t InvalidKey                = 0x13;
+inline constexpr uint8_t InvalidKey                = 0x35; // ISO 14229; 0x13 is
+                                                           // incorrectMessageLength
+inline constexpr uint8_t BusyRepeatRequest         = 0x21;
 inline constexpr uint8_t ResponsePending           = 0x78;
 } // namespace NRC
 } // namespace uds
@@ -182,8 +184,12 @@ inline uint32_t compute(uint16_t pin, uint32_t seed) {
 // These return the PDU bytes that the ISO-TP layer then segments into CAN frames.
 // Kept tiny: a Diagbox/PyPSADiag passthrough can send raw bytes too, so these are
 // convenience, not a cage.
+// buf must hold the largest PDU we ever build. That is TransferData:
+// 0x36 + block-sequence-counter + one S-record payload (kMaxFlashBlock).
+// It used to be 16, which a 32-byte S-record silently memcpy'd straight past.
+inline constexpr size_t kMaxFlashBlock = 64;
 struct Req {
-    uint8_t buf[16];
+    uint8_t buf[kMaxFlashBlock + 2];
     uint8_t len;
 };
 
@@ -199,6 +205,17 @@ inline Req startDiagSession(Protocol p) {
     if (p == Protocol::UDS)        { r.buf[0]=uds::DiagnosticSessionControl; r.buf[1]=uds::SessDiag; r.len=2; }
     else if (p == Protocol::KWP_IS){ r.buf[0]=kwp::StartSession_IS; r.len=1; }
     else /* KWP_HAB */             { r.buf[0]=kwp::StartDiagnosticSession; r.buf[1]=kwp::SessDiag; r.len=2; }
+    return r;
+}
+
+// Programming session. An ECU will reject erase/download outright unless it has
+// been moved out of the default/diagnostic session first, so the flash sequence
+// must open this before anything else.
+inline Req startProgrammingSession(Protocol p) {
+    Req r{{},0};
+    if (p == Protocol::UDS)        { r.buf[0]=uds::DiagnosticSessionControl; r.buf[1]=uds::SessDownload; r.len=2; }
+    else if (p == Protocol::KWP_IS){ r.buf[0]=kwp::StartSession_IS; r.len=1; }
+    else /* KWP_HAB */             { r.buf[0]=kwp::StartDiagnosticSession; r.buf[1]=0x85; r.len=2; }
     return r;
 }
 

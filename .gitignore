@@ -1,4 +1,4 @@
 build/
 build_host/
 test_psa
-
+*.log

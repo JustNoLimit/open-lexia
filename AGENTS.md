@@ -5,6 +5,159 @@
 
 ---
 
+## 0e. GÜNCELLEME — 2026-07-25 (denetim + düzeltme turu: ISO-TP akış kontrolü, stack, flash güvenliği)
+
+Kod tabanı 10 alt sistemde ajan filosuyla denetlendi, her bulgu düşmanca bir doğrulama turundan
+geçirildi ve onaylananlar düzeltildi. Ayrıca dış kaynaklar (ludwig-v, prototux/PSA-RE,
+Melnik-Alex/PSA_CAN) tarandı. **Bu bölüm aşağıdaki §6 ve §7'nin bir kısmını geçersiz kılar.**
+
+### Kritik — cihazı kilitleyen / belleği bozan
+
+- **`main()` 2 KB'lık stack'e 74.752 bayt yerel değişken koyuyordu.** `DiagShell` (74.904 bayt) ve
+  `CanManager` `main()` içinde yereldi; `__StackTop=0x20082000`, `__StackBottom=0x20081800`, yani
+  core-0 stack'i sadece 2 KB. Derleyici `main`'e `sub.w sp, sp, #74752` üretiyordu → SP, tanımlı
+  stack tabanının **72 KB altına** iniyordu. O bölge statik olarak kullanılmadığı için tesadüfen
+  patlamıyordu. Nesneler `.bss`'e taşındı ([main.cpp](src/main.cpp)); `main()` çerçevesi artık
+  **32 bayt**. `SRecord::data` gerçekçi boyuta indirildiği için `DiagShell` de 74.904 → ~32 KB oldu.
+  bss 83.752 → 115.724 (520 KB'nin içinde rahat).
+- **Firmware hiç derlenmiyordu.** [CMakeLists.txt](CMakeLists.txt) `PICO_BOARD` pinlemiyordu →
+  dokümante edilen `cmake -B build` varsayılan `pico` (RP2040, cyw43 yok) ile configure edip
+  `lwip/tcp.h` bulunamadığından ölüyordu. `set(PICO_BOARD pico2_w CACHE ...)` eklendi (project()
+  öncesinde olmak zorunda).
+- **Flash S-record payload'ı 16 baytlık `Req::buf`'a `memcpy` ediliyordu.** `SRecord::data` 256
+  bayt, `data_len` sınırsız (252'ye kadar) — sıradan bir 32 baytlık S1 kaydı çağıranın stack
+  çerçevesini eziyordu, üstelik ECU zaten silinmiş ve bootloader oturumu açıkken.
+  `Req::buf` `kMaxFlashBlock+2`'ye genişletildi, `SRecord::data` aynı boyuta indirildi, parser
+  fazlasını **reddediyor** (kırpmıyor — kırpmak ECU imajında delik bırakırdı), `memcpy` ayrıca
+  clamp'lendi. ([psa_protocol.hpp](include/psa/psa_protocol.hpp),
+  [flash_engine.hpp](include/psa/flash_engine.hpp), [flash_engine.cpp](src/flash_engine.cpp))
+- **`hwtest` `ready()` guard'ını deliyordu.** `can_->hs()`/`ls()` ham referans döndürüyordu; çipi
+  takılı olmayan bus'ta `spi_write_blocking` sonsuza kadar bekleyip ana döngüyü kilitliyordu —
+  yani §0c'de "ilk seri bağlantıda çalıştır" denen komut, teşhis etmesi gereken donanımda cihazı
+  öldürüyordu. Ham erişimciler kaldırıldı; `CanManager::bus(Bus)` hazır olmayan bus için
+  **nullptr** döndürüyor, guard artık unutulamaz. ([can_manager.hpp](include/psa/can_manager.hpp))
+- **Cevap zaman aşımı prosedürü temizlemiyordu.** Timeout bloğu `state_`'i `Idle`'a alıyor, altındaki
+  prosedür kontrolü `WaitingResponse` göremediği için `abortProcedure()` hiç çalışmıyordu → `proc_`
+  set kalıyor ve sonradan gelen alakasız bir yanıt bayat bir yazma dizisini devam ettirebiliyordu.
+  Tek bloğa birleştirildi; timeout artık `config_readall_active_`, `flash_active_`, `pdi_active_`,
+  `live_polling_active_` ve `proc_`'un hepsini söküyor.
+- **TesterPresent bekleyen isteğin üstüne gidiyordu.** Keep-alive `WaitingResponse` sırasında da
+  gönderiliyordu; ona gelen bir negatif yanıt, bekleyen isteğin reddi sanılıp devam eden flash'ı
+  veya prosedürü iptal ediyordu. İstek uçuştayken keep-alive susturuldu.
+- **Watchdog hiç yoktu.** Wi-Fi ayağa kalktıktan sonra 8 sn'lik watchdog arm ediliyor
+  (5 sn'lik ISO-TP timeout'unun rahat üstünde), döngüde `watchdog_update()`.
+
+### ISO-TP — çok-frame'li her şey kırıktı
+
+- **Gönderici tarafı akış kontrolünü tamamen yok sayıyordu.** `encode()` First Frame + bütün
+  Consecutive Frame'leri üretiyor, `sendPdu()` hepsini arka arkaya bus'a basıyordu. Gerçek ECU
+  bunları düşürür → **telekodlama yazmaları ve flash yolu hiç çalışmıyordu**. FC.OVERFLOW (0x32),
+  yani "kabul etmiyorum" cevabı da yutuluyordu; ECU açıkça reddederken yazmaya devam ediyorduk.
+  Artık gerçek bir gönderici durum makinesi var ([isotp.hpp](include/psa/isotp.hpp),
+  [isotp.cpp](src/isotp.cpp)): `beginSend()` FF'i yollayıp bekler, `feed()` FC'yi çözer
+  (FS=CTS/WAIT/OVERFLOW, BS, STmin — `0xF1-0xF9` mikrosaniye kodlaması dahil), `nextTxFrame()`
+  blok boyutu ve STmin'e uyarak CF'leri `poll()`'dan pompalar, N_Bs (1 sn) dolunca iptal eder.
+- **Alıcı tarafı BS=0/STmin=0 ilan ediyordu** (sınırsız ak) ama ana döngü bus başına turda tek
+  frame çekiyordu. Artık sınırlı blok (`kRxBlockSize=8`) + `kRxStMinMs=1`, ve ana döngü her turda
+  iki bus'ı da (sınırlı biçimde, `kMaxRxPerPass=8`) boşaltıyor.
+- `sendPdu` `McpError`'ı atıyordu; 4. frame'den itibaren sessizce düşüyordu. Artık `sendFrame()`
+  sınırlı retry yapıyor ve başarısızlığı **kullanıcıya bildiriyor**.
+
+### MCP2515
+
+- **Üç TX buffer'ı da eşit öncelikteydi.** Datasheet eşitlikte **yüksek numaralı** buffer'ı önce
+  yolluyor → çok-frame'li her isteğin CF'leri ters sırada gidiyordu. TXB0>TXB1>TXB2 azalan öncelik
+  `init()`'te set edildi.
+- TXREQ timeout'u, bus-off tespiti ve hata sayacı yönetimi yoktu: kimse ACK vermezse (kontak
+  kapalı, konnektör takılı değil) TXREQ hiç temizlenmiyor, üç buffer da kilitleniyor ve o bus
+  **güç kesilene kadar** bir daha veri gönderemiyordu. `errorFlags()`/`busOff()`/`recoverBus()`
+  eklendi; `send()` bütün buffer'lar doluyken TXBO/TXEP görürse kuyruğu boşaltıyor.
+- 29-bit genişletilmiş ID'ler `uint16_t`'a kırpılıyordu (ama `ext=true` raporlanıyordu).
+  `CanFrame::id` `uint32_t` oldu.
+- `hwtest`'in SPI varlık testi **CNF1**'e yazıyordu; CNF register'ları yalnızca configuration
+  mode'da yazılabilir, o an çipler Normal mode'daydı → **sağlam donanımda FAIL** veriyordu.
+  Artık her modda yazılabilen `CANINTE` ile probe ediliyor ve eski değeri geri yazılıyor.
+
+### Flash yolu
+
+- **Programlama oturumu hiç açılmıyordu**; erase/download doğrudan gönderiliyordu. Artık
+  `flash begin` önce programlama oturumu açıyor (`startProgrammingSession()`), onay gelince erase.
+- **Veri olmayan S-record'lar (S0/S5/S7/S8/S9) firmware payload'ı olarak yollanıyordu** — S0'ın
+  adresi (0) flash hedefi oluyordu. Artık yalnızca S1/S2/S3 stage ediliyor.
+- **RequestDownload adres 0 ve sabit 64 KB bildiriyordu** (boş bir `dummy` kayıttan üretiliyordu).
+  Artık stage edilmiş imajın gerçek adres/boyutunu bildiriyor, ve ECU'nun yanıtındaki
+  `maxNumberOfBlockLength` okunup TransferData blok boyutu ona göre kısıtlanıyor.
+- **Akış sırası düzeltildi:** erase/download el sıkışması milisaniyeler içinde bitip stage listesini
+  yürüdüğü için, `flash begin` listeyi sıfırladığında TransferData'ya **hep boş** varılıyordu.
+  Artık önce `flash <S-record>` satırlarıyla imaj stage ediliyor, sonra `flash begin`; kayıt yoksa
+  `begin` reddediyor. `flash cancel` listeyi temizliyor.
+
+### Veri / arayüz
+
+- **0x3A7 bakım çerçevesi yanlış baytları okuyordu** (km ve gün ikisi de yanlış). İki bağımsız
+  kaynak (ludwig-v comfort adapter, Melnik-Alex/PSA_CAN) km'yi `data[3..4]`, günü `data[5..6]`
+  diyor; düzeltildi.
+- **0x1D0 klima çözümlendi** (fan, üfleme yönü, demist/devirdaim, sol/sağ sıcaklık, MONO tespiti) —
+  kaynak: ludwig-v/arduino-psa-comfort-can-adapter. Bu, custom head-unit hedefinin ana çerçevesiydi.
+- **Kaynağı doğrulanamayan 4 decoder** (0x208, 0x488, 0x161, 0x0E8) çıktısında artık `(unverified)`
+  etiketi taşıyor — üç bağımsız kaynakta da bu ID'ler yok, ölçek/offset tahmin.
+- `uds::NRC::InvalidKey` 0x13'tü; ISO 14229'da doğrusu **0x35** (0x13 = incorrectMessageLength).
+- Çözülemeyen bir parametrenin `[LIVE]` ham çıktısı iki nokta içeriyordu; panonun ölçüm regex'i
+  (`/^\[LIVE\] (.+): ([-0-9.]+)/`) ilk hex baytı **ölçülen değer sanıp grafiğe çiziyordu**.
+  Ayraç değiştirildi, pano tarafı değişmedi (asset yeniden üretmek gerekmedi).
+
+### Ağ katmanı ([wifi_server.cpp](src/wifi_server.cpp))
+
+HTTP isteği tek bir `recv()` çağrısından parse ediliyordu → TCP segmentlerine bölünen istek
+(uzun bir `/api/cmd?val=...` için normal) yarım yorumlanıyordu; artık bağlantı başına `CRLFCRLF`
+görülene kadar biriktiriliyor (sabit havuz, `kMaxConns=4`, malloc yok), sınır aşılırsa 400.
+`tcp_recved()` hiç çağrılmıyordu → alma penceresi kapanıp bağlantı kalıcı olarak tıkanıyordu.
+`urlDecode()` sonda tek `%` görünce tamponun dışını okuyordu. `tcp_write()`'ın `ERR_MEM`'i
+kontrol edilmiyordu → ~19 KB'lık `dashboard.js` sessizce kırpılabiliyordu; artık `tcp_sent()`
+callback'inden devam ediyor. lwIP callback bağlamındaki `printf`'ler kaldırıldı, yerine düşen SSE
+pcb'si gerçekten kapatılıyor, SSE dışı yanıtlar boşalınca kapatılıyor.
+**Pano sözleşmesi (§2, §5) bit düzeyinde korundu** — hiçbir route, header veya SSE satır formatı
+değişmedi.
+
+### Depo hijyeni
+
+`stdout.log`/`stderr.log` git'te takip ediliyordu → kaldırıldı, `*.log` ignore edildi.
+`include/psa/actuator_catalog.hpp` takip edilmiyordu ama `diag_shell.cpp` onu include ediyordu
+(temiz bir klonda derleme kırılırdı) → eklendi.
+
+### Doğrulama
+
+- Host self-check: **27 kontrol, hepsi geçiyor.** Yeni testler: ISO-TP gönderici akış kontrolü
+  (FC.CTS/WAIT/OVERFLOW + BS + STmin + N_Bs timeout), alıcı FC parametreleri, S-record sınırları ve
+  kayıt-tipi sınıflandırması, flash extent/oturum sırası, reddedilen iletimin yutulmaması.
+- `cmake -B build_host -DHOST_TEST=ON` yolu da geçiyor.
+- Firmware: `cmake -B build && cmake --build build` **bayraksız** temiz derleniyor
+  (text 467.012 / 4 MB flash, bss 115.724 / 520 KB SRAM), `.uf2` üretiliyor.
+- `node --check dashboard/dashboard.js` geçiyor; `dashboard_assets.h` senkron (pano dosyaları
+  değişmedi).
+
+### YAPILMAYANLAR / açık kalanlar
+
+- **Hiçbiri gerçek araçta denenmedi.** Bu ortamda araç/CAN bus yok; `hwtest` ve `gsniff` ile aynı
+  durumdayız: mantık host testiyle doğrulandı, fiziksel doğrulama kullanıcıya kalıyor.
+  Özellikle ISO-TP akış kontrolü, MCP2515 TX önceliği ve flash sırası araçta teyit edilmeli.
+- **PSA BSI aktüatör testi RoutineControl ID'leri hâlâ bilinmiyor.** ludwig-v, prototux/PSA-RE ve
+  Melnik-Alex/PSA_CAN'de kamuya açık kaynak yok. [actuator_catalog.hpp](include/psa/actuator_catalog.hpp)
+  bilerek sadece **isim** taşıyor, ID taşımıyor — yanlış ID'yi gerçek araçta ateşlemek güvenli değil.
+- **[ecu_params.hpp](include/psa/ecu_params.hpp)'deki `0x3E01`-`0x3E05` aktüatör ID'lerinin kaynağı
+  yok** (marş rölesi, yakıt pompası, fan, kızdırma bujisi). Araçta doğrulanana kadar şüpheli
+  sayılmalı — bunlar gerçekten fiziksel aktüatör tetikliyor.
+- `ecu_params.hpp`'deki **BSM bloğu adreslenebilir değil** (BSM, BSI'nın adresinde cevap veriyor;
+  §0'da kEcuTable'dan çıkarılmıştı). Referans veri olarak duruyor, hiçbir yerden erişilmiyor.
+  BMF'ye birleştirmeden önce araçta doğrulanmalı — o adresin arkasındaki yanlış ECU'ya yazmak
+  geri alınabilir bir hata değil.
+- CAN2004/C5 Mk1 FL için **kilometre sayacı ve far/sinyal durumu broadcast çerçevesi bulunamadı**
+  hiçbir kamuya açık kaynakta. Canlı capture gerekiyor.
+- **Ölçüm tek parametre** mimari kısıtı (§6) değişmedi.
+- (Yok) `tests/test_psa.cpp` başındaki derleme komutu da bu turda güncellendi.
+
+---
+
 ## 0d. GÜNCELLEME — 2026-07-20 (kılavuzlu/komutlu CAN sniffing — sinyal keşif aracı)
 
 - **Amaç:** RD4 yerine custom head-unit/dashboard yapabilmek için önce bilinmeyen broadcast
@@ -209,7 +362,27 @@ Bu düzeltmeler **görsel değil, fonksiyonel** ve doğru çalışması zorunlud
 - `ECU_CONFIG_PARAMS[family]`, `ECU_MEAS_PARAMS[family]`, `ACTUATOR_TESTS[family]` — `ecu_params.hpp`'dan üretilir, **elle düzenlenmez**.
 - `sendCommand(cmd)` — fetch `'/api/cmd?val='+encodeURIComponent(cmd)`.
 - `connectSSE()` — EventSource; `onmessage` → `parseLogLine` (meas tarama burada).
-- DOM id'leri: `#sseStatus #statusDot #statusText #consoleOutput #ecuList #ecuDetail #bsiTree #bsiDetail #measCategory #btnMeasStart #btnMeasStop #btnCsvExport #chkRecord #measGrid .meas-card[data-idx] #sparkN #actTestList #dtcEcuSelect #dtcBody #btnStartScan #btnPdi #btnBsiReadAll #btnBsiWrite #btnActLoadTests #btnReadDtc #btnClearDtc #btnClearLog #btnToggleAutoScroll #btnConsoleSend #consoleInput #fwInput #btnFwSend #tab-firmware [data-fw] .nav-item[data-tab] .tab-pane#tab-X .vin-display .model-display .year-display #ecuCount`. **Yeni HTML yazarken bunları koru**
+- **DOM id'leri (2026-07-25'te gerçek dosyalara karşı yeniden çıkarıldı).** Buradaki eski liste
+  arayüzün 2026-07-18'de sıfırdan yazılmasından kalmaydı ve **31 id'nin 23'ü artık hiçbir dosyada
+  yoktu** (`sseStatus statusDot statusText consoleOutput ecuList ecuDetail bsiTree bsiDetail
+  measCategory btnCsvExport chkRecord measGrid actTestList dtcEcuSelect btnStartScan btnBsiReadAll
+  btnBsiWrite btnActLoadTests btnToggleAutoScroll btnConsoleSend fwInput btnFwSend ecuCount` —
+  hepsi silindi). Doğrulandı: `dashboard.js`'in aradığı **her** id `dashboard.html`'de mevcut,
+  kırık `getElementById` yok. Güncel liste:
+
+  `#app #sidebar #sideToggle #themeToggle #indLink #indComms #vehVin #vehModel #ecuTree #ecuName
+  #ecuMeta #lockState #funcTabs #scanSummary #btnGlobalTest #btnPdi #btnIdent #identTable
+  #btnUnlock #pinInput #btnReadDtc #btnClearDtc #dtcTable #dtcBody #dtcCount #measSelect
+  #btnMeasStart #btnMeasStop #measName #measValue #measUnit #measSpark #actList #cfgEditor
+  #cfgSearch #btnCfgReadAll #srecInput #btnFlashBegin #btnFlashSend #btnFlashEnd #btnFlashStatus
+  #btnFlashCancel #sniffScenario #sniffStep #btnSniffRun #btnSniffNext #btnSniffBase #btnSniffStart
+  #btnSniffStop #btnSniffClear #btnSniffSave #btnSniffLoad #btnSniffWatch #btnSniffWatchOff
+  #sniffMode #sniffN #sniffWatchBus #sniffWatchId #sniffLearnedTable #sniffLearnedBody
+  #sniffCandTable #sniffCandBody #sniffEmpty #console #consoleOut #consoleInput #btnConsoleToggle
+  #btnClearLog #chkAutoscroll`
+
+  **Yeni HTML yazarken bunları koru.** Doğrulama tek satır:
+  `python3 -c "import re;h=set(re.findall(r'id=\"([\w-]+)\"',open('dashboard/dashboard.html').read()));print([x for x in re.findall(r'getElementById\([\x27\"]([\w-]+)',open('dashboard/dashboard.js').read()) if x not in h])"`
 
 ---
 
@@ -260,12 +433,26 @@ Telecoding sekmesi ham-hex `prompt`'tan **Lexia-tarzı gerçek ayar menüsüne**
   ```
   Bu `include/psa/dashboard_assets.h`'i yeniden üretir.
 - **C++ derleme (gerçek cihaz):** CMake + PICO_SDK gerektirir. `PICO_SDK_PATH` ayarlı olmalı.
+  Board artık `CMakeLists.txt`'de pinli (`pico2_w`), **`-DPICO_BOARD` vermeye gerek yok**:
   ```
-  mkdir -p build && cd build && cmake .. && make
+  cmake -B build && cmake --build build -j8
   ```
-- **Host test (düzeltildi 2026-07-18):** `src/*.cpp` glob'unu direkt derlemeye çalışma — `main.cpp`/`mcp2515.hpp` gerçekten Pico SDK ister. Ama `tests/test_psa.cpp` PICO SDK **istemiyor**; doğru komut dosyanın başında yazıyor:
-  `g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp -o test_psa && ./test_psa`
-  Bu komut PICO_SDK_PATH gerektirmeden temiz derlenir ve tüm assertion'lar geçer.
+  (2026-07-25 öncesinde board pinli değildi ve bu komut lwIP başlıkları bulunamadığı için hiç
+  derlenmiyordu — bkz. §0e.)
+- **Host test (komut 2026-07-25'te düzeltildi):** `src/*.cpp` glob'unu direkt derlemeye çalışma —
+  `main.cpp`/`mcp2515.hpp` gerçekten Pico SDK ister. Ama `tests/test_psa.cpp` PICO SDK
+  **istemiyor**. Doğru komut — eski hali `can_sniffer.cpp` ve `wifi_server.cpp`'yi atladığı için
+  linklenmiyordu:
+  ```
+  g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp \
+      src/flash_engine.cpp src/can_sniffer.cpp src/wifi_server.cpp -o /tmp/test_psa && /tmp/test_psa
+  ```
+  PICO_SDK_PATH gerektirmeden temiz derlenir, 27 kontrolün hepsi geçer.
+  CMake yolu da aynı dosya kümesini derler:
+  ```
+  cmake -B build_host -DHOST_TEST=ON && cmake --build build_host && ./build_host/test_psa
+  ```
+  (`tests/test_psa.cpp` başındaki yorum bloğu da bu komutla senkron.)
 - **JS sözdizimi:** `node --check dashboard/dashboard.js` ile doğrulandı (geçti).
 
 ---

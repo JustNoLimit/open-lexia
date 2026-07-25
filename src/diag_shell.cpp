@@ -4,6 +4,7 @@
 #include "psa/ecu_keys.hpp"
 #include "psa/live_data.hpp"
 #include "psa/dtc_text.hpp"
+#include "psa/actuator_catalog.hpp"
 #include "psa/flash_engine.hpp"
 #include "psa/ecu_zones.hpp"
 #include <cstdio>
@@ -14,7 +15,9 @@
 
 // Use Pico SDK timer for timestamps when on hardware; fallback for host tests.
 #ifdef HOST_TEST
-static uint64_t g_fake_time_us = 0;
+// Not static: the host self-check drives this to exercise the flow-control and
+// response timeouts, which are pure time-based logic and otherwise untestable.
+uint64_t g_fake_time_us = 0;
 static inline uint64_t get_time_us() { return g_fake_time_us; }
 static inline int getchar_nonblocking() { return -1; /* no input in test mode */ }
 #else
@@ -60,14 +63,50 @@ void DiagShell::diagLog(const char* fmt, ...) const {
 // --- Main loop poll ----------------------------------------------------------
 
 bool DiagShell::poll() {
+    // Pump any consecutive frames the peer has cleared us to send. ISO-TP
+    // forbids dumping them all at once: the ECU's flow control dictates the
+    // block size and separation time, so the transmit side is paced from here.
+    if (tp_.txActive() && ecu_ != nullptr) {
+        uint64_t now = get_time_us();
+        CanFrame cf;
+        while (tp_.nextTxFrame(now, cf)) {
+            if (!sendFrame(cf)) {
+                printf("[DIAG] CAN transmit failed mid-transfer; aborting request.\n");
+                tp_.txReset();
+                break;
+            }
+        }
+        if (tp_.txTimedOut(now)) {
+            printf("[DIAG] ECU never sent flow control; request aborted.\n");
+            tp_.txReset();
+            if (state_ == State::WaitingResponse) state_ = State::Connected;
+        }
+    }
+
     // Check for response timeout
     if (state_ == State::WaitingResponse) {
         uint64_t now = get_time_us();
         if (now - response_start_us_ > kResponseTimeoutUs) {
             printf("[DIAG] Response timeout.\n");
+            tp_.txReset();
+            // Every long-running operation has to be torn down here. Leaving a
+            // flag set meant the next unrelated response was fed back into a
+            // stale state machine — for a procedure that could resume a write
+            // sequence the user had already been told had timed out.
             if (config_readall_active_) {
                 config_readall_active_ = false;
                 printf("[CONFIG] Readall timed out.\n");
+            }
+            if (flash_active_) {
+                flash_active_ = false;
+                printf("[FLASH] Timed out; flash sequence aborted.\n");
+            }
+            if (proc_ != Procedure::None) {
+                abortProcedure("Response timeout during procedure");
+            }
+            if (live_polling_active_) {
+                live_polling_active_ = false;
+                printf("[LIVE] Stopped (no response).\n");
             }
             if (scan_active_ && ecu_) {
                 scan_results_[scan_index_].scanned = true;
@@ -78,13 +117,17 @@ bool DiagShell::poll() {
                 ecu_ = nullptr;
                 advanceScan();
             } else {
+                pdi_active_ = false;
                 state_ = State::Idle;
             }
         }
     }
 
-    // Send keep-alive if connected
-    if (isConnected()) {
+    // Send keep-alive if connected — but never while a request is outstanding.
+    // A TesterPresent is redundant then, and any negative response it provokes
+    // is indistinguishable from a rejection of the pending request, which used
+    // to abort in-flight procedures and flash writes.
+    if (isConnected() && state_ != State::WaitingResponse && !tp_.txActive()) {
         uint64_t now = get_time_us();
         if (now - last_keepalive_us_ >= kKeepAliveIntervalUs) {
             sendKeepAlive();
@@ -119,13 +162,9 @@ bool DiagShell::poll() {
         }
     }
 
-    // Procedure state machine timeouts
-    if (proc_ != Procedure::None && state_ == State::WaitingResponse) {
-        uint64_t now = get_time_us();
-        if (now - response_start_us_ > kResponseTimeoutUs) {
-            abortProcedure("Response timeout during procedure");
-        }
-    }
+    // (Procedure timeouts are handled in the response-timeout block above; a
+    // separate check here was dead code — the block above had already moved the
+    // state out of WaitingResponse before it ran.)
 
     // Guided sniffer: auto-close the baseline window on its deadline.
     sniffer_.tick(get_time_us());
@@ -166,9 +205,19 @@ bool DiagShell::feedDiagFrame(const CanFrame& f) {
     switch (st) {
     case IsoTpStatus::NeedFlowControl: {
         CanFrame fc = tp_.flowControl(ecu_->emit_id);
-        can_->send(active_bus_, fc);
+        sendFrame(fc);
         break;
     }
+    case IsoTpStatus::TxClearToSend:
+        break;                       // poll() pumps the consecutive frames
+    case IsoTpStatus::TxWait:
+        printf("[DIAG] ECU asked to wait (FC.WAIT); holding transfer.\n");
+        break;
+    case IsoTpStatus::TxAbort:
+        printf("[DIAG] ECU refused the transfer (FC.OVERFLOW); request aborted.\n");
+        tp_.txReset();
+        if (state_ == State::WaitingResponse) state_ = State::Connected;
+        break;
     case IsoTpStatus::Done:
         if (state_ == State::WaitingResponse) state_ = State::Connected;
         handleResponse(tp_.pdu(), tp_.pdu_len());
@@ -475,33 +524,52 @@ void DiagShell::cmdHwtest() {
     // --- Test 1: SPI register read on both buses ---
     printf("[HWTEST] Test 1: SPI register read...\n");
 
-    uint8_t hs_canstat = can_->hs().readReg(Mcp2515::MCP_CANSTAT);
-    uint8_t ls_canstat = can_->ls().readReg(Mcp2515::MCP_CANSTAT);
-    printf("[HWTEST]   HS CANSTAT = 0x%02X (mode bits: 0x%02X)\n", hs_canstat, hs_canstat & 0xE0);
-    printf("[HWTEST]   LS CANSTAT = 0x%02X (mode bits: 0x%02X)\n", ls_canstat, ls_canstat & 0xE0);
+    // A bus whose chip never answered at init() must not be touched at all: its
+    // SPI peripheral wedges (spi_write_blocking spins forever) once cyw43 is up,
+    // which would hang the whole main loop. CanManager::bus() returns nullptr in
+    // that case, so the guard cannot be forgotten here.
+    Mcp2515* hs = can_->bus(Bus::HighSpeed);
+    Mcp2515* ls = can_->bus(Bus::LowSpeed);
+    if (!hs) printf("[HWTEST]   HS: SKIP (no chip answered at init - not probing, would hang)\n");
+    if (!ls) printf("[HWTEST]   LS: SKIP (no chip answered at init - not probing, would hang)\n");
+
+    if (hs) {
+        uint8_t s = hs->readReg(Mcp2515::MCP_CANSTAT);
+        printf("[HWTEST]   HS CANSTAT = 0x%02X (mode bits: 0x%02X)\n", s, s & 0xE0);
+    }
+    if (ls) {
+        uint8_t s = ls->readReg(Mcp2515::MCP_CANSTAT);
+        printf("[HWTEST]   LS CANSTAT = 0x%02X (mode bits: 0x%02X)\n", s, s & 0xE0);
+    }
 
     // A floating/unconnected bus can coincidentally read back a non-0xFF
     // value (we saw LS read a stable 0x00 with no chip attached), so a plain
     // "!= 0xFF" check isn't reliable evidence of a real chip. Write a known
-    // pattern to a scratch register (CNF1, safe — we re-init afterwards) and
-    // read it back: only a chip actually present and latched onto the SPI
-    // bus will echo it, a floating line won't reproduce an arbitrary byte.
+    // pattern to a scratch register and read it back: only a chip actually
+    // present and latched onto the SPI bus will echo it.
+    // CNF1 must NOT be used — the bit-timing registers are writable only in
+    // configuration mode, and by now both chips are in Normal mode, so the probe
+    // always read back the bitrate value and reported FAIL on good hardware.
+    // CANINTE is writable in every mode; save and restore it.
     auto spiPresent = [](Mcp2515& mcp) {
         static constexpr uint8_t kProbe = 0xA5;
-        mcp.writeReg(Mcp2515::MCP_CNF1, kProbe);
-        return mcp.readReg(Mcp2515::MCP_CNF1) == kProbe;
+        uint8_t saved = mcp.readReg(Mcp2515::MCP_CANINTE);
+        mcp.writeReg(Mcp2515::MCP_CANINTE, kProbe);
+        bool ok = mcp.readReg(Mcp2515::MCP_CANINTE) == kProbe;
+        mcp.writeReg(Mcp2515::MCP_CANINTE, saved);
+        return ok;
     };
-    bool hs_ok = spiPresent(can_->hs());
-    bool ls_ok = spiPresent(can_->ls());
+    bool hs_ok = hs && spiPresent(*hs);
+    bool ls_ok = ls && spiPresent(*ls);
 
-    printf("[HWTEST]   HS SPI: %s\n", hs_ok ? "OK" : "FAIL (readback mismatch - check wiring/level-shift)");
-    printf("[HWTEST]   LS SPI: %s\n", ls_ok ? "OK" : "FAIL (readback mismatch - check wiring/level-shift)");
+    if (hs) printf("[HWTEST]   HS SPI: %s\n", hs_ok ? "OK" : "FAIL (readback mismatch - check wiring/level-shift)");
+    if (ls) printf("[HWTEST]   LS SPI: %s\n", ls_ok ? "OK" : "FAIL (readback mismatch - check wiring/level-shift)");
 
-    // Also read CANCTRL to double-check
-    uint8_t hs_canctrl = can_->hs().readReg(Mcp2515::MCP_CANCTRL);
-    uint8_t ls_canctrl = can_->ls().readReg(Mcp2515::MCP_CANCTRL);
-    printf("[HWTEST]   HS CANCTRL = 0x%02X\n", hs_canctrl);
-    printf("[HWTEST]   LS CANCTRL = 0x%02X\n", ls_canctrl);
+    // Also read CANCTRL and the latched error flags to double-check
+    if (hs) printf("[HWTEST]   HS CANCTRL = 0x%02X  EFLG = 0x%02X\n",
+                   hs->readReg(Mcp2515::MCP_CANCTRL), hs->errorFlags());
+    if (ls) printf("[HWTEST]   LS CANCTRL = 0x%02X  EFLG = 0x%02X\n",
+                   ls->readReg(Mcp2515::MCP_CANCTRL), ls->errorFlags());
 
     if (!hs_ok && !ls_ok) {
         printf("[HWTEST] FAIL: Both MCP2515 unresponsive. Check SPI wiring + level-shifters.\n");
@@ -566,8 +634,8 @@ void DiagShell::cmdHwtest() {
     };
 
     bool hs_lb = false, ls_lb = false;
-    if (hs_ok) hs_lb = runLoopback("HS (500k)", can_->hs());
-    if (ls_ok) ls_lb = runLoopback("LS (125k)", can_->ls());
+    if (hs_ok) hs_lb = runLoopback("HS (500k)", *hs);
+    if (ls_ok) ls_lb = runLoopback("LS (125k)", *ls);
 
     // --- Summary ---
     printf("[HWTEST] === Summary ===\n");
@@ -869,23 +937,44 @@ void DiagShell::sendReq(const Req& req) {
     sendPdu(req.buf, req.len);
 }
 
-void DiagShell::sendPdu(const uint8_t* pdu, size_t len) {
-    CanFrame frames[16];
-    size_t n = IsoTp::encode(ecu_->emit_id, pdu, len, frames, 16);
-    for (size_t i = 0; i < n; ++i) {
-        can_->send(active_bus_, frames[i]);
+bool DiagShell::sendFrame(const CanFrame& f) {
+    // The MCP2515 has three transmit buffers and no queue behind them. Dropping
+    // a frame because they are momentarily full silently truncates a multi-frame
+    // request, so retry briefly before admitting failure.
+    for (int attempt = 0; attempt < kTxRetries; ++attempt) {
+        McpError e = can_->send(active_bus_, f);
+        if (e == McpError::Ok) return true;
+        if (e != McpError::AllTxBusy) return false;   // bus not ready: no point retrying
+#ifndef HOST_TEST
+        sleep_us(200);
+#endif
     }
+    return false;
+}
+
+void DiagShell::sendPdu(const uint8_t* pdu, size_t len) {
+    if (ecu_ == nullptr) return;
+    CanFrame first;
+    if (!tp_.beginSend(ecu_->emit_id, pdu, len, get_time_us(), first)) {
+        printf("[DIAG] Request too large to send (%u bytes).\n", static_cast<unsigned>(len));
+        return;
+    }
+    if (!sendFrame(first)) {
+        printf("[DIAG] CAN transmit failed (bus busy or not ready).\n");
+        tp_.txReset();
+        return;
+    }
+    // Anything longer than a single frame now waits for the ECU's flow control;
+    // poll() pumps the consecutive frames once it arrives.
 }
 
 void DiagShell::sendKeepAlive() {
     if (ecu_ == nullptr) return;
     Req req = keepAlive(ecu_->proto);
-    // Send keep-alive silently (no state change, no response wait)
-    CanFrame frames[2];
-    size_t n = IsoTp::encode(ecu_->emit_id, req.buf, req.len, frames, 2);
-    for (size_t i = 0; i < n; ++i) {
-        can_->send(active_bus_, frames[i]);
-    }
+    // Keep-alive is always a single frame, so it never disturbs an in-flight
+    // segmented transfer. Sent silently: no state change, no response wait.
+    CanFrame f;
+    if (IsoTp::encode(ecu_->emit_id, req.buf, req.len, &f, 1) == 1) sendFrame(f);
 }
 
 void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
@@ -896,6 +985,27 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
     // Any genuine (non-"response pending") reply ends the pending streak.
     bool is_pending = (service == 0x7F && len >= 3 && pdu[2] == uds::NRC::ResponsePending);
     if (!is_pending) pending_count_ = 0;
+
+    // The programming session that opens a flash is the shell's own request, not
+    // the flash engine's. It has to be claimed before the generic session-open
+    // handlers below consume it, or the erase request is never emitted.
+    if (flash_session_pending_ && !is_pending) {
+        flash_session_pending_ = false;
+        if (service == 0x7F) {
+            printNegResponse(pdu, len);
+            printf("[FLASH] ECU refused the programming session; aborting.\n");
+            flash_active_ = false;
+            state_ = State::Connected;
+            return;
+        }
+        SRecord dummy{};
+        Req req = flash_engine_.nextRequest(dummy, 0);   // Idle -> RequestErase
+        printf("[FLASH] Programming session open, sending erase request...\n");
+        sendReq(req);
+        state_ = State::WaitingResponse;
+        response_start_us_ = get_time_us();
+        return;
+    }
 
     // Negative response
     if (service == 0x7F) {
@@ -1049,9 +1159,28 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
 
         // Auto-advance: send next request based on current step
         if (step == FlashEngine::Step::RequestDownload) {
+            if (staged_count_ == 0) {
+                printf("[FLASH] No data records staged; nothing to download.\n");
+                flash_active_ = false;
+                return;
+            }
+            // Announce the real extent of the staged image. This used to be
+            // built from an empty record: address 0 and a hardcoded 64 KB.
+            uint32_t lo = staged_records_[0].address;
+            uint32_t hi = lo;
+            uint32_t total = 0;
+            for (uint16_t i = 0; i < staged_count_; ++i) {
+                const SRecord& s = staged_records_[i];
+                if (s.address < lo) lo = s.address;
+                if (s.address + s.data_len > hi) hi = s.address + s.data_len;
+                total += s.data_len;
+            }
+            (void)total;
+            flash_engine_.setDownloadExtent(lo, hi - lo);
             SRecord dummy{};
             Req req = flash_engine_.nextRequest(dummy, 0);
-            printf("[FLASH] Requesting download...\n");
+            printf("[FLASH] Requesting download: addr=0x%08X size=%u bytes...\n",
+                   lo, static_cast<unsigned>(hi - lo));
             sendReq(req);
             state_ = State::WaitingResponse;
             response_start_us_ = get_time_us();
@@ -1125,7 +1254,10 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
                 float val = param->decode(pdu + header_len, len - header_len);
                 printf("[LIVE] %s: %.1f %s\n", param->name, val, param->unit);
             } else {
-                printf("[LIVE] ID %04X: ", resp_param_id);
+                // No colon here on purpose: the dashboard's measurement parser is
+                // /^\[LIVE\] (.+): ([-0-9.]+) ?(.*)$/, so a colon would make it
+                // read the first hex byte as the measured value and plot it.
+                printf("[LIVE] ID %04X undecoded raw = ", resp_param_id);
                 printHex(pdu + header_len, len - header_len);
                 printf("\n");
             }
@@ -1585,9 +1717,23 @@ void DiagShell::cmdLive(const char* arg) {
 }
 
 void DiagShell::cmdActuator(const char* arg) {
+    if (!*arg) {
+        printf("Usage: actuator <test_id_hex> [args_hex]  (e.g. actuator 3101)\n");
+        printf("\n[Actuator test catalog — UNVERIFIED, RoutineControl IDs unknown]\n");
+        printf("  (discover the real ID on the car, then run 'actuator <id>')\n");
+        const char* last_group = nullptr;
+        for (size_t i = 0; i < kActuatorCatalogCount; ++i) {
+            const ActuatorTest& t = kActuatorCatalog[i];
+            if (!last_group || strcmp(last_group, t.group) != 0) {
+                printf("  [%s / %s]\n", t.ecu, t.group);
+                last_group = t.group;
+            }
+            printf("    --.-- : %s\n", t.name);
+        }
+        return;
+    }
     if (!isConnected()) { printf("[DIAG] Not connected.\n"); return; }
     if (state_ == State::WaitingResponse) { printf("[DIAG] Waiting for previous response...\n"); return; }
-    if (!*arg) { printf("[DIAG] Usage: actuator <test_id_hex> [args_hex]\n"); return; }
 
     const char* id_start = arg;
     while (*id_start && isspace(static_cast<unsigned char>(*id_start))) id_start++;
@@ -1634,14 +1780,24 @@ void DiagShell::cmdFlash(const char* arg) {
     if (!unlocked_) { printf("[FLASH] ECU is locked. Use 'unlock' first.\n"); return; }
 
     if (strcmp(arg, "begin") == 0) {
+        // Records must be staged first. The erase/download handshake completes in
+        // milliseconds and then walks the staged list, so a `begin` that cleared
+        // the list could only ever reach TransferData with nothing to transfer.
+        if (staged_count_ == 0) {
+            printf("[FLASH] No S-records staged. Send the file with 'flash <S-record>' lines first,\n");
+            printf("[FLASH] then run 'flash begin'. 'flash cancel' clears the staged image.\n");
+            return;
+        }
         flash_engine_.init(ecu_->proto);
-        staged_count_ = 0;
         staged_index_ = 0;
         flash_seq_ = 1;
         flash_active_ = true;
-        SRecord dummy{};
-        Req req = flash_engine_.nextRequest(dummy, 0);
-        printf("[FLASH] Starting flash sequence, sending erase request...\n");
+        // An ECU rejects erase/download unless it is in a programming session;
+        // the sequence used to jump straight to erase and get an NRC on a real
+        // car. Erase is emitted once this session request is acknowledged.
+        flash_session_pending_ = true;
+        Req req = startProgrammingSession(ecu_->proto);
+        printf("[FLASH] Starting flash sequence, opening programming session...\n");
         sendReq(req);
         state_ = State::WaitingResponse;
         response_start_us_ = get_time_us();
@@ -1688,11 +1844,22 @@ void DiagShell::cmdFlash(const char* arg) {
     // Otherwise, treat arg as an S-record line
     SRecord rec;
     if (!SRecordParser::parseLine(arg, rec)) {
-        printf("[FLASH] Invalid S-record line.\n");
+        printf("[FLASH] Invalid S-record line (bad checksum, malformed, or payload over %u bytes).\n",
+               static_cast<unsigned>(kMaxFlashBlock));
         return;
     }
 
-    if (!flash_active_) { printf("[FLASH] No active flash. Use 'flash begin' first.\n"); return; }
+    // Staging is deliberately allowed before 'flash begin' — nothing is sent to
+    // the ECU until then, and the whole image has to be in place before the
+    // erase/download handshake starts walking it.
+
+    // Only S1/S2/S3 carry firmware. S0 is a header, S5/S6 record counts and
+    // S7/S8/S9 start addresses — staging those would push metadata into the ECU
+    // as if it were code, and an S0's address (0) would become the flash target.
+    if (!SRecordParser::isDataRecord(rec.type)) {
+        printf("[FLASH] Skipped non-data record S%u (header/count/start-address).\n", rec.type);
+        return;
+    }
 
     // Stage the record
     if (staged_count_ < 256) {

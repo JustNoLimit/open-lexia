@@ -91,6 +91,10 @@ private:
     // --- Internal helpers ---
     void sendReq(const Req& req);
     void sendPdu(const uint8_t* pdu, size_t len);
+    // Put one frame on the active bus, retrying while the controller's three
+    // transmit buffers are full. Returns false once it gives up.
+    bool sendFrame(const CanFrame& f);
+    static constexpr int kTxRetries = 32;
     void handleResponse(const uint8_t* pdu, size_t len);
     void printDtcKwp(const uint8_t* pdu, size_t len);
     void printDtcUds(const uint8_t* pdu, size_t len);
@@ -166,6 +170,7 @@ private:
     uint16_t          staged_index_ = 0;
     uint8_t           flash_seq_ = 1;
     bool              flash_active_ = false;
+    bool              flash_session_pending_ = false;  // awaiting programming-session reply
 
     // --- Procedure state machines ---
     enum class Procedure : uint8_t {

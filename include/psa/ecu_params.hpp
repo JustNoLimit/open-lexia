@@ -579,6 +579,14 @@ inline constexpr ActuatorTestEntry kAdcActuatorTests[] = {
 
 // =============================================================================
 // BSM (Engine Relay Unit) — zone 0x3500, LIDs 0x71-0x77
+//
+// NOT ADDRESSABLE as its own ECU: the BSM row was removed from kEcuTable
+// (psa_protocol.hpp) because it answers on the BSI's own CAN address, so
+// `connect BSM` would just be a second name for BMF. The tables below are kept
+// as reference — the zone and mask layout is real and reverse-engineered — but
+// nothing reaches them from the UI (there is no BSM entry in dashboard.js's
+// ECUS[]). Do not merge them into BMF's set without verifying on a car: a write
+// aimed at the wrong ECU behind that address is not a recoverable mistake.
 // =============================================================================
 
 inline constexpr const char* kBsmEnum_engineVariant[] = { "0=DW10 (HDi 110)","1=DW12 (HDi 136)","2=ES9 (V6)","3=EW10 (2.0i)","4=EW7 (1.8i)",nullptr };

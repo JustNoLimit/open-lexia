@@ -31,8 +31,21 @@ public:
     // wired up must never be touched again — its SPI peripheral can wedge
     // (spi_write_blocking spins forever) once Wi-Fi/cyw43 comes up.
     bool ready(Bus b) const { return b == Bus::HighSpeed ? hs_ready_ : ls_ready_; }
-    Mcp2515& hs() { return hs_; }
-    Mcp2515& ls() { return ls_; }
+
+    // Raw controller access for hardware diagnostics. Returns nullptr for a bus
+    // whose chip never answered, so a caller physically cannot reach around the
+    // ready() guard and wedge the SPI peripheral — hwtest used to do exactly
+    // that, hanging the main loop on the very hardware it exists to diagnose.
+    Mcp2515* bus(Bus b) {
+        if (!ready(b)) return nullptr;
+        return b == Bus::HighSpeed ? &hs_ : &ls_;
+    }
+
+    // Latched controller error flags for a bus (0 if the bus is not ready).
+    uint8_t errorFlags(Bus b) {
+        Mcp2515* m = bus(b);
+        return m ? m->errorFlags() : 0;
+    }
 private:
     Mcp2515 hs_;
     Mcp2515 ls_;

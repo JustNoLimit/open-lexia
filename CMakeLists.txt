@@ -18,6 +18,11 @@ if(HOST_TEST)
 endif()
 
 # --- Pico firmware ---
+# The board must be pinned before pico_sdk_import.cmake: the default is plain
+# "pico" (RP2040, no cyw43), which silently drops the Wi-Fi stack and makes the
+# whole build die on a missing <lwip/tcp.h>. This is a Pico 2 W.
+set(PICO_BOARD pico2_w CACHE STRING "Target board")
+
 # pico_sdk_import.cmake sets CMAKE_TOOLCHAIN_FILE, which CMake only honours if
 # it's included before project() — otherwise project() locks in the host
 # compiler and every cross-compiled source/asm file fails to build.

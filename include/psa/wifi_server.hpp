@@ -36,6 +36,15 @@ public:
     // Broadcast a single log line to the connected SSE client (no trailing newline).
     void broadcastLog(const char* msg);
 
+#ifndef HOST_TEST
+    // Per-connection request/response state (request reassembly buffer + deferred
+    // send bookkeeping). Defined in wifi_server.cpp. Declared public (rather than
+    // forward-declared private) so the free helper functions in wifi_server.cpp's
+    // anonymous namespace — allocConn/trySend/etc, which aren't WifiServer members
+    // — can name the type; it's still opaque outside that one translation unit.
+    struct HttpConn;
+#endif
+
 private:
     WifiServer() = default;
 
@@ -46,10 +55,11 @@ private:
     static err_t  recvCallback(void* arg, struct tcp_pcb* tpcb, struct pbuf* p, err_t err);
     static void   errCallback(void* arg, err_t err);
     static err_t  pollCallback(void* arg, struct tcp_pcb* tpcb);
+    static err_t  sentCallback(void* arg, struct tcp_pcb* tpcb, u16_t len);
 
-    void handleHttpRequest(struct tcp_pcb* tpcb, const char* req);
-    void registerSseClient(struct tcp_pcb* tpcb);
-    void unregisterSseClient(struct tcp_pcb* tpcb);
+    void handleHttpRequest(struct tcp_pcb* tpcb, HttpConn* conn);
+    void registerSseClient(struct tcp_pcb* tpcb, HttpConn* conn);
+    void unregisterSseClient(HttpConn* conn);
 
     struct tcp_pcb* server_pcb_    = nullptr;
     struct tcp_pcb* sse_client_pcb_ = nullptr;

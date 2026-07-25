@@ -59,6 +59,21 @@ public:
     McpError read(CanFrame& out);   // defined in isotp.hpp; reuse psa::CanFrame
     McpError send(const CanFrame& f);
 
+    // EFLG bits we act on (datasheet DS21801 §6.3).
+    static constexpr uint8_t EFLG_RX1OVR = 0x80;
+    static constexpr uint8_t EFLG_RX0OVR = 0x40;
+    static constexpr uint8_t EFLG_TXBO   = 0x20;  // bus-off
+    static constexpr uint8_t EFLG_TXEP   = 0x10;  // transmitter error-passive
+
+    // Latched error flags, and whether the transmitter has given up on the bus.
+    // Nothing acknowledges our frames when the connector is unplugged or the
+    // ignition is off, so this is the normal failure the user needs told about.
+    uint8_t  errorFlags();
+    bool     busOff() { return (errorFlags() & EFLG_TXBO) != 0; }
+    // Drop every queued transmission and clear the latched RX-overflow bits, so
+    // a transmitter that stalled with TXREQ set can be used again.
+    void     recoverBus();
+
     uint8_t  readReg(Reg r);        // public for hw diagnostics
     void     writeReg(Reg r, uint8_t v); // public for hw diagnostics
 

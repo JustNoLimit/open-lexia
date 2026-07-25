@@ -2,12 +2,19 @@
 // Compile and run:
 //   cmake -B build_host -DHOST_TEST=ON && cmake --build build_host && ./build_host/test_psa
 //   or directly:
-//   g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp src/diag_shell.cpp src/flash_engine.cpp src/wifi_server.cpp src/can_sniffer.cpp -o test_psa && ./test_psa
+//   g++ -std=c++17 -Iinclude -DHOST_TEST tests/test_psa.cpp src/isotp.cpp
+//       src/diag_shell.cpp src/flash_engine.cpp src/can_sniffer.cpp
+//       src/wifi_server.cpp -o /tmp/test_psa && /tmp/test_psa
+//       (all six .cpp on one line; they are wrapped here only for width)
 //   (clang++ works too). Returns 0 on success, non-zero on the first failed assert.
 //
-// Covers the two pieces of non-trivial logic in the project:
+// Covers the non-trivial logic in the project:
 //   1. PSA seed/key algorithm  (determinism + a known pair)
-//   2. ISO-15765-2 transport   (single + multi-frame round-trip)
+//   2. ISO-15765-2 transport   (single + multi-frame, and the sender's flow
+//      control: FC.CTS/WAIT/OVERFLOW, block size, STmin, N_Bs timeout)
+//   3. Flash path              (S-record bounds, record-type filtering,
+//      download extent, programming-session ordering)
+//   4. Shell state machine     (unlock flow, transmit-failure reporting)
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
@@ -23,11 +30,20 @@
 #include "psa/can_sniffer.hpp"
 #include <vector>
 
+// The shell's host-test clock. Tests advance it to exercise the flow-control
+// and response timeouts.
+extern uint64_t g_fake_time_us;
+
 namespace psa {
 std::vector<CanFrame> g_sent_frames;
+// Tests flip this to make the controller refuse, so the failure path is covered
+// rather than assumed. The real driver returns AllTxBusy whenever all three
+// hardware transmit buffers are still latched.
+McpError g_send_result = McpError::Ok;
 
 McpError CanManager::send(Bus b, const CanFrame& f) {
     (void)b;
+    if (g_send_result != McpError::Ok) return g_send_result;
     g_sent_frames.push_back(f);
     return McpError::Ok;
 }
@@ -228,13 +244,31 @@ static void test_diag_shell_unlock_flow() {
     assert(consumed);
     assert(shell.state() == psa::DiagShell::State::Connected);
 
-    // 4. Trace command
+    // 4. Trace command — a 12-byte PDU, so ISO-TP segments it. Only the First
+    //    Frame may go out; the consecutive frame is owed to the ECU's flow
+    //    control. Sending both immediately (as this used to) makes a real ECU
+    //    drop the tail of every multi-frame request.
     psa::g_sent_frames.clear();
     shell.feedCommandLine("trace");
     assert(shell.state() == psa::DiagShell::State::WaitingResponse);
-    assert(psa::g_sent_frames.size() == 2);
+    assert(psa::g_sent_frames.size() == 1);
     assert(psa::g_sent_frames[0].data[0] == 0x10);
     assert(psa::g_sent_frames[0].data[1] == 12);
+
+    // Nothing more may leave until flow control arrives, however long we poll.
+    g_fake_time_us += 1000;
+    shell.poll();
+    assert(psa::g_sent_frames.size() == 1);
+
+    // ECU clears us to send (FS=CTS, BS=0 unlimited, STmin=0).
+    psa::CanFrame fc{};
+    fc.id = resp.id; fc.dlc = 3;
+    fc.data[0] = 0x30; fc.data[1] = 0x00; fc.data[2] = 0x00;
+    consumed = shell.feedDiagFrame(fc);
+    assert(consumed);
+    g_fake_time_us += 1000;
+    shell.poll();
+    assert(psa::g_sent_frames.size() == 2);
     assert(psa::g_sent_frames[1].data[0] == 0x21);
 
     printf("  diag_shell: unlock and configuration write flow OK\n");
@@ -311,15 +345,25 @@ static void test_diag_shell_unlock_uds_flow() {
     assert(shell.state() == psa::DiagShell::State::Connected);
     assert(shell.isUnlocked());
 
-    // 3. Write command
+    // 3. Write command — 10-byte PDU, so First Frame now, consecutive frame only
+    //    once the ECU sends flow control.
     psa::g_sent_frames.clear();
     shell.feedCommandLine("write 2901 FD 00 00 00 01 01 01");
     assert(shell.state() == psa::DiagShell::State::WaitingResponse);
-    assert(psa::g_sent_frames.size() == 2);
+    assert(psa::g_sent_frames.size() == 1);
     assert(psa::g_sent_frames[0].data[0] == 0x10); // First Frame PCI
     assert(psa::g_sent_frames[0].data[1] == 10);   // PDU length 10
+
+    psa::CanFrame fc{};
+    fc.id = resp.id; fc.dlc = 3;
+    fc.data[0] = 0x30; fc.data[1] = 0x00; fc.data[2] = 0x00;
+    assert(shell.feedDiagFrame(fc));
+    g_fake_time_us += 1000;
+    shell.poll();
+    assert(psa::g_sent_frames.size() == 2);
     assert(psa::g_sent_frames[1].data[0] == 0x21); // Consecutive Frame PCI
-    
+
+
     // Feed write positive response (0x6E 0x29 0x01)
     resp.data[0] = 3;
     resp.data[1] = 0x6E;
@@ -576,6 +620,122 @@ static void test_pin_override_flow() {
     printf("  diag_shell: manual PIN override flow OK\n");
 }
 
+// The sender must obey the peer's flow control. Before this existed, every
+// consecutive frame was dumped on the bus the instant the First Frame went out,
+// which a real ECU drops — so multi-frame writes and flashing never worked.
+// A refused transmission must not be swallowed. The shell used to discard every
+// CanManager::send() result, so a request that never reached the bus looked
+// identical to one the ECU ignored — the user just saw a response timeout.
+static void test_shell_reports_transmit_failure() {
+    psa::CanManager can;
+    psa::DiagShell shell;
+    shell.init(&can);
+
+    psa::g_sent_frames.clear();
+    psa::g_send_result = psa::McpError::Ok;
+    shell.feedCommandLine("connect BMF");
+    psa::CanFrame resp{};
+    resp.id = 0x652; resp.dlc = 8;
+    resp.data[0] = 1; resp.data[1] = 0xC1;
+    shell.feedDiagFrame(resp);
+    assert(shell.isConnected());
+
+    // Now the controller refuses everything.
+    psa::g_send_result = psa::McpError::AllTxBusy;
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("dtc");
+    assert(psa::g_sent_frames.empty());          // nothing reached the bus
+    // and no transmit state is left dangling for poll() to trip over
+    psa::g_send_result = psa::McpError::Ok;
+    g_fake_time_us += 1000;
+    shell.poll();
+    assert(psa::g_sent_frames.empty());
+
+    printf("  diag_shell: refused transmission is reported, not swallowed OK\n");
+}
+
+static void test_isotp_tx_flow_control() {
+    using namespace psa;
+    uint8_t pdu[30];
+    for (size_t i = 0; i < sizeof(pdu); ++i) pdu[i] = static_cast<uint8_t>(i);
+
+    IsoTp tp;
+    CanFrame f{};
+    uint64_t now = 1000;
+    assert(tp.beginSend(0x752, pdu, sizeof(pdu), now, f));
+    assert(f.data[0] == 0x10 && f.data[1] == 30);   // First Frame, 30 bytes
+    assert(tp.txActive());
+
+    // Nothing may go out before flow control, no matter how much time passes.
+    CanFrame cf{};
+    assert(!tp.nextTxFrame(now + 100000, cf));
+
+    // FC.WAIT holds us; still nothing on the wire.
+    CanFrame fc{};
+    fc.dlc = 3; fc.data[0] = 0x31; fc.data[1] = 0x00; fc.data[2] = 0x00;
+    assert(tp.feed(fc) == IsoTpStatus::TxWait);
+    assert(!tp.nextTxFrame(now + 200000, cf));
+
+    // FC.CTS with BS=2 and STmin=5 ms: exactly two frames, spaced 5 ms apart.
+    fc.data[0] = 0x30; fc.data[1] = 0x02; fc.data[2] = 0x05;
+    assert(tp.feed(fc) == IsoTpStatus::TxClearToSend);
+    now += 200000;
+    assert(tp.nextTxFrame(now, cf));
+    assert(cf.data[0] == 0x21);
+    assert(!tp.nextTxFrame(now, cf));           // STmin not elapsed
+    now += 5000;
+    assert(tp.nextTxFrame(now, cf));
+    assert(cf.data[0] == 0x22);
+    now += 5000;
+    assert(!tp.nextTxFrame(now, cf));           // block exhausted, awaiting new FC
+
+    // A fresh FC (BS=0 = unlimited, STmin=0) drains the rest.
+    fc.data[1] = 0x00; fc.data[2] = 0x00;
+    assert(tp.feed(fc) == IsoTpStatus::TxClearToSend);
+    int emitted = 0;
+    while (tp.nextTxFrame(now, cf)) ++emitted;
+    assert(emitted == 2);                       // 30 bytes = 6 + 4x7 -> 4 CFs total
+    assert(!tp.txActive());
+
+    // FC.OVERFLOW means the ECU refused the transfer; we must stop, not keep
+    // writing into an ECU that has explicitly said no.
+    IsoTp tp2;
+    assert(tp2.beginSend(0x752, pdu, sizeof(pdu), now, f));
+    fc.data[0] = 0x32;
+    assert(tp2.feed(fc) == IsoTpStatus::TxAbort);
+    assert(!tp2.txActive());
+    assert(!tp2.nextTxFrame(now + 100000, cf));
+
+    // An ECU that never answers must not leave the transfer wedged forever.
+    IsoTp tp3;
+    assert(tp3.beginSend(0x752, pdu, sizeof(pdu), now, f));
+    assert(!tp3.txTimedOut(now + 100000));
+    assert(tp3.txTimedOut(now + 2000000));
+
+    // A single frame owes nothing and leaves no transmit state behind.
+    IsoTp tp4;
+    uint8_t sf[3] = {0x22, 0xF1, 0x90};
+    assert(tp4.beginSend(0x752, sf, sizeof(sf), now, f));
+    assert(f.data[0] == 3);
+    assert(!tp4.txActive());
+
+    printf("  isotp: sender honours FC.CTS/WAIT/OVERFLOW, BS and STmin OK\n");
+}
+
+// The flow control we advertise as a receiver must not tell the ECU to stream
+// without limit: the controller only buffers two frames.
+static void test_isotp_rx_flow_control_params() {
+    using namespace psa;
+    IsoTp tp;
+    CanFrame fc = tp.flowControl(0x752);
+    assert(fc.data[0] == 0x30);                 // clear to send
+    assert(fc.data[1] == IsoTp::kRxBlockSize);  // bounded block, not 0/unlimited
+    assert(fc.data[1] != 0);
+    assert(fc.data[2] == IsoTp::kRxStMinMs);    // a real gap, not 0
+    assert(fc.data[2] != 0);
+    printf("  isotp: receiver advertises a bounded BS and non-zero STmin OK\n");
+}
+
 static void test_isotp_out_of_order_rejected() {
     psa::IsoTp tp;
     uint8_t pdu[20];
@@ -809,14 +969,33 @@ static void test_flash_shell_begin() {
     shell.feedDiagFrame(resp);
     assert(shell.isUnlocked());
 
-    // Flash begin should send erase request
+    // 'flash begin' with nothing staged must refuse: the erase/download
+    // handshake completes in milliseconds and would reach TransferData empty.
     psa::g_sent_frames.clear();
     shell.feedCommandLine("flash begin");
+    assert(psa::g_sent_frames.empty());
+
+    // Stage an image, then begin. That must open a programming session first —
+    // an ECU rejects erase and download outright from the diagnostic session.
+    shell.feedCommandLine("flash S30A001000001122334455E6");
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("flash begin");
+    assert(!psa::g_sent_frames.empty());
+    // BMF speaks KWP_IS, whose session start is the single byte 0x81.
+    assert(psa::g_sent_frames.back().data[0] == 1);
+    assert(psa::g_sent_frames.back().data[1] == 0x81);
+
+    // Only once that is acknowledged does the erase request go out.
+    psa::g_sent_frames.clear();
+    resp.data[0] = 1;
+    resp.data[1] = 0xC1;
+    shell.feedDiagFrame(resp);
     assert(!psa::g_sent_frames.empty());
     // KWP erase: 31 81 81 F0 5A
     assert(psa::g_sent_frames.back().data[1] == 0x31);
     assert(psa::g_sent_frames.back().data[2] == 0x81);
-    printf("  flash_shell: begin sends erase request OK\n");
+
+    printf("  flash_shell: begin opens programming session, then erases OK\n");
 }
 
 static void test_flash_shell_srecord_staging() {
@@ -841,25 +1020,103 @@ static void test_flash_shell_srecord_staging() {
     resp.data[6] = 0x00;
     shell.feedDiagFrame(resp);
 
+    // Stage a valid S3 record (6 payload bytes at 0x00100000), then begin.
+    shell.feedCommandLine("flash S30A001000001122334455E6");
+    // Non-data records must be refused, not pushed to the ECU as firmware.
+    shell.feedCommandLine("flash S0030000FC");            // S0 header
+    shell.feedCommandLine("flash S9030000FC");            // S9 start address
+
     psa::g_sent_frames.clear();
     shell.feedCommandLine("flash begin");
+    // Programming session ack -> erase request
+    resp.data[0] = 1;
+    resp.data[1] = 0xC1;
+    shell.feedDiagFrame(resp);
     // Feed erase response -> auto-advances to RequestDownload, sends 0x34
+    psa::g_sent_frames.clear();
     resp.data[0] = 1;
     resp.data[1] = 0x70;
     shell.feedDiagFrame(resp);
     assert(!psa::g_sent_frames.empty());
     assert(psa::g_sent_frames.back().data[1] == 0x34);
-    // Feed download positive response -> auto-advances to TransferData
+    // The download must announce the staged image's real extent, not a dummy
+    // address of 0 with a hardcoded size. KWP form: 34 <addr 3B> <cmp> <size 2B>.
+    assert(psa::g_sent_frames.back().data[2] == 0x10);   // addr 0x001000..
+    assert(psa::g_sent_frames.back().data[3] == 0x00);
+    assert(psa::g_sent_frames.back().data[4] == 0x00);
+    assert(psa::g_sent_frames.back().data[6] == 0x00);   // size hi
+    assert(psa::g_sent_frames.back().data[7] == 5);      // size lo = 5 payload bytes
+
+    // Feed download positive response -> auto-advances to TransferData and
+    // immediately ships the one staged block as 0x36.
     resp.data[0] = 1;
     resp.data[1] = 0x76;
     psa::g_sent_frames.clear();
     shell.feedDiagFrame(resp);
-    // Now in TransferData, auto-advance sends nothing (no staged records yet)
-    assert(psa::g_sent_frames.empty());
+    assert(!psa::g_sent_frames.empty());
+    assert(psa::g_sent_frames.back().data[1] == 0x36);
+    printf("  flash_shell: staging, extent and non-data-record rejection OK\n");
+}
 
-    // Stage a valid S3 record
-    shell.feedCommandLine("flash S30A001000001122334455E6");
-    printf("  flash_shell: S-record staging OK\n");
+// An ordinary 32-byte S-record used to memcpy 34 bytes into a 16-byte Req::buf
+// in the caller's stack frame. The parser must now bound it, and TransferData
+// must never write past buf whatever it is handed.
+static void test_flash_srecord_bounds() {
+    using namespace psa;
+    SRecord rec{};
+    // Build an S1 with a 32-byte payload rather than hand-typing it: byte_count
+    // is 2 address + 32 data + 1 checksum, and the checksum is ~sum of all of
+    // those plus the count itself.
+    auto build = [](char* out, uint8_t type, uint16_t addr, const uint8_t* data, uint8_t n) {
+        uint8_t count = static_cast<uint8_t>(2 + n + 1);
+        uint8_t sum = count;
+        sum += static_cast<uint8_t>(addr >> 8);
+        sum += static_cast<uint8_t>(addr & 0xFF);
+        for (uint8_t i = 0; i < n; ++i) sum += data[i];
+        int p = std::sprintf(out, "S%u%02X%04X", type, count, addr);
+        for (uint8_t i = 0; i < n; ++i) p += std::sprintf(out + p, "%02X", data[i]);
+        std::sprintf(out + p, "%02X", static_cast<uint8_t>(~sum));
+    };
+    uint8_t payload[32];
+    for (int i = 0; i < 32; ++i) payload[i] = static_cast<uint8_t>(i);
+    char line[128];
+    build(line, 1, 0x0010, payload, 32);
+    bool ok = SRecordParser::parseLine(line, rec);
+    assert(ok);
+    assert(rec.data_len == 32);
+    assert(rec.data_len <= sizeof(rec.data));
+
+    // Whatever the record claims, the emitted request must stay inside buf.
+    FlashEngine fe;
+    fe.init(Protocol::UDS);
+    fe.nextRequest(rec, 0);                 // Idle -> RequestErase
+    const uint8_t erase_ok[] = {0x71, 0x01};
+    fe.handleResponse(0x71, erase_ok, sizeof(erase_ok));   // -> RequestDownload
+    Req dl = fe.nextRequest(rec, 0);        // -> TransferData
+    assert(dl.len <= sizeof(dl.buf));
+    Req td = fe.nextRequest(rec, 1);
+    assert(td.buf[0] == 0x36);
+    assert(td.len == 2 + 32);
+    assert(td.len <= sizeof(td.buf));
+
+    // A payload larger than one TransferData can carry is rejected outright
+    // rather than silently truncated into a hole in the ECU image.
+    SRecord big{};
+    char huge[600];
+    std::strcpy(huge, "S1FF0010");
+    for (int i = 0; i < 252; ++i) std::strcat(huge, "AA");
+    std::strcat(huge, "00");
+    assert(!SRecordParser::parseLine(huge, big));
+
+    // Record-type classification.
+    assert(SRecordParser::isDataRecord(1));
+    assert(SRecordParser::isDataRecord(2));
+    assert(SRecordParser::isDataRecord(3));
+    assert(!SRecordParser::isDataRecord(0));
+    assert(!SRecordParser::isDataRecord(5));
+    assert(!SRecordParser::isDataRecord(7));
+    assert(!SRecordParser::isDataRecord(9));
+    printf("  flash_engine: S-record bounds + data-record classification OK\n");
 }
 
 static void test_dtc_text() {
@@ -919,10 +1176,14 @@ int main() {
     test_srecord_parser();
     test_flash_checksum();
     test_flash_engine_uds();
+    test_isotp_tx_flow_control();
+    test_isotp_rx_flow_control_params();
+    test_shell_reports_transmit_failure();
     test_isotp_out_of_order_rejected();
     test_isotp_malformed_frames_rejected();
     test_flash_shell_begin();
     test_flash_shell_srecord_staging();
+    test_flash_srecord_bounds();
     test_pin_override_flow();
     test_can_sniffer_count_mode();
     test_can_sniffer_hold_mode();
