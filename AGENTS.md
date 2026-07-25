@@ -45,6 +45,10 @@ Kaynak: https://github.com/JustNoLimit/citroen-can — C5 Mk1 FL için verified 
 
 - ECU adres tablosu doğrulandı, değişmedi.
 - Hiçbir değişiklik gerçek araçta denenmedi (ISO-TP akış kontrolü, MCP2515 öncelik, flash sırası).
+- **Eksik ECU PIN'leri (CLIM, HDC, SPNEU, AUTORADIO, ADC, MDP_*, PROJECTEURS, AIDE_STAT) önemli değil.** 
+  Bu ECU'ların çoğu BSI arkasındaki LIN/periferik modüller; SecurityAccess BSI üzerinden yapılır,
+  ayrı PIN gerekmez. Kalanlar için kamuya açık kaynak yok, `pin <hex>` ile elle girilir.
+  Üç dilde (FR/EN/RU) arandı, bulunamadı — tekrar aramaya gerek yok.
 
 ---
 
