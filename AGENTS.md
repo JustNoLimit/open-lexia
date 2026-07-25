@@ -189,8 +189,8 @@ değişmedi.
   durumdayız: mantık host testiyle doğrulandı, fiziksel doğrulama kullanıcıya kalıyor.
   Özellikle ISO-TP akış kontrolü, MCP2515 TX önceliği ve flash sırası araçta teyit edilmeli.
 - **Aktüatör test ID'leri — BSM removed from kEcuTable** (not addressable separately
-  from BSI), `kBsmActuatorTests` array (0x3E01-0x3E05) deleted from `ecu_params.hpp` 
-  as dead code with no verified source.
+  from BSI), `kBsmActuatorTests` array (0x3E01-0x3E05) kept in `ecu_params.hpp` as
+  reference with UNVERIFIED warning — no independently verified source.
 - `ecu_params.hpp`'deki **BSM bloğu adreslenebilir değil** (BSM, BSI'nın adresinde cevap veriyor;
   §0'da kEcuTable'dan çıkarılmıştı). Referans veri olarak duruyor, hiçbir yerden erişilmiyor.
   BMF'ye birleştirmeden önce araçta doğrulanmalı — o adresin arkasındaki yanlış ECU'ya yazmak

@@ -612,8 +612,21 @@ inline constexpr LiveDataParam kBsmMeasParams[] = {
     {0x77, "Glow plug status", "", decodeRawByte},
 };
 
-// BSM actuator tests removed — BSM is not independently addressable (responds at
-// BSI address) and the RoutineControl IDs (0x3E01-0x3E05) had no verified source.
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠ UNVERIFIED — BSM (Engine Bay Fusebox) actuator test RoutineControl IDs.
+//   BSM is not independently addressable (responds at BSI address 752:652).
+//   These IDs (0x3E01-0x3E05) have NO independently verified source and are
+//   based on unconfirmed Lexia/Diagbox observations. DO NOT activate on a
+//   running engine — wrong ID could trigger starter relay, fuel pump, etc.
+//   Use at your own risk. See AGENTS.md "Kalan işler" for details.
+// ─────────────────────────────────────────────────────────────────────────────
+inline constexpr ActuatorTestEntry kBsmActuatorTests[] = {
+    {0x3E01, "Starter Relay", "Activate starter relay"},
+    {0x3E02, "Fuel Pump Relay", "Activate fuel pump relay"},
+    {0x3E03, "Cooling Fan Low", "Engine cooling fan low speed"},
+    {0x3E04, "Cooling Fan High", "Engine cooling fan high speed"},
+    {0x3E05, "Glow Plug Relay", "Activate glow plug relay"},
+};
 
 // =============================================================================
 // ALARME (Alarm System) — zone 0x3600, LIDs 0x81-0x85
