@@ -53,6 +53,7 @@ public:
     McpError setNormalMode();
     McpError setListenOnlyMode();   // passive sniffer mode
     McpError setLoopbackMode();     // internal loopback for self-test
+    McpError setBaudRate(CanBitrate br); // runtime baud rate change (enters config mode)
     void     setSnifferFilters();   // accept all standard frames
 
     bool     hasRx();               // check INT pin / status

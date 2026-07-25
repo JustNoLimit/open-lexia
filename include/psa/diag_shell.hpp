@@ -51,6 +51,7 @@ public:
     bool  isScanning() const { return scan_active_; }
     const char* ecuFamily() const { return ecu_ ? ecu_->family : "none"; }
     Bus   activeBus() const { return active_bus_; }
+    Bus   sniffBus() const { return sniff_bus_; }
 
     // Register a log sink callback. When set, every printf-style log line from
     // the shell also gets forwarded to this sink (e.g. WifiServer::broadcastLog).
@@ -128,6 +129,7 @@ private:
     const EcuAddr*  ecu_ = nullptr;     // currently connected ECU
     Bus             active_bus_ = Bus::HighSpeed;
     bool            sniff_enabled_ = true;
+    Bus             sniff_bus_ = Bus::HighSpeed;
     CanSniffer      sniffer_;
     bool            unlocked_ = false;
     uint16_t        manual_pin_ = 0;        // user-supplied SecurityAccess PIN (`pin` cmd)

@@ -33,6 +33,7 @@ void DiagShell::init(CanManager* can) {
     state_ = State::Idle;
     ecu_ = nullptr;
     sniff_enabled_ = true;
+    sniff_bus_ = Bus::HighSpeed;
     line_pos_ = 0;
     tp_.reset();
     unlocked_ = false;
@@ -367,7 +368,7 @@ void DiagShell::cmdHelp() {
         "  flash status          Show current flash state machine step\n"
         "  flash cancel          Abort flash sequence\n"
         "  raw <hex bytes>       Send raw PDU (e.g. raw 21 80)\n"
-        "  sniff [on|off]        Toggle passive decoding\n"
+        "  sniff [on|off]        Toggle passive decoding (gsniff rate hs/ls to change bus)\n"
         "  scan                  Global ECU test (scan all ECUs)\n"
         "  pdi                   Pre-Delivery Inspection (full report)\n"
         "  config list           List all BSI configuration parameters\n"
@@ -913,9 +914,22 @@ void DiagShell::cmdGuidedSniff(const char* arg) {
 #else
         printf("[GSNIFF] load: host test'te desteklenmiyor.\n");
 #endif
+    } else if (strcmp(sub, "rate") == 0) {
+        if (strcmp(subarg, "hs") == 0 || strcmp(subarg, "HS") == 0) {
+            sniff_bus_ = Bus::HighSpeed;
+            if (can_) can_->reconfigureBus(Bus::HighSpeed, CanBitrate::Bps500k);
+            printf("[GSNIFF] Switched to HS (500k). Connect MCP2515 to OBD pins 3/8.\n");
+        } else if (strcmp(subarg, "ls") == 0 || strcmp(subarg, "LS") == 0) {
+            sniff_bus_ = Bus::LowSpeed;
+            if (can_) can_->reconfigureBus(Bus::LowSpeed, CanBitrate::Bps125k);
+            printf("[GSNIFF] Switched to LS (125k). Connect MCP2515 to BSI CAN lines.\n");
+        } else {
+            printf("[GSNIFF] Usage: gsniff rate <hs|ls>\n");
+        }
     } else {
         printf(
             "Usage: gsniff <alt-komut>\n"
+            "  rate <hs|ls>           MCP2515 baud rate'ini degistir (500k/125k)\n"
             "  run <senaryo>          Hazir kontrol listesini yurut (orn. run climate)\n"
             "  next                   Senaryoda sonraki adima gec\n"
             "  base [sn]              Gurultu tabanini kaydet (varsayilan 3sn)\n"

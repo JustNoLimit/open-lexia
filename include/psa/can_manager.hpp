@@ -46,6 +46,18 @@ public:
         Mcp2515* m = bus(b);
         return m ? m->errorFlags() : 0;
     }
+
+    // Reconfigure a bus's bitrate at runtime and return to listen-only mode.
+    // Returns false if the bus is not ready or reconfiguration fails.
+#ifndef HOST_TEST
+    bool reconfigureBus(Bus bus, CanBitrate rate) {
+        if (!ready(bus)) return false;
+        Mcp2515* m = bus == Bus::HighSpeed ? &hs_ : &ls_;
+        return m->setBaudRate(rate) == McpError::Ok;
+    }
+#else
+    bool reconfigureBus(Bus, CanBitrate) { return false; }
+#endif
 private:
     Mcp2515 hs_;
     Mcp2515 ls_;

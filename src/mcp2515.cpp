@@ -147,6 +147,27 @@ McpError Mcp2515::setLoopbackMode() {
     return setMode(REQOP_LOOPBACK);
 }
 
+McpError Mcp2515::setBaudRate(CanBitrate br) {
+    if (setMode(REQOP_CONFIG) != McpError::Ok) return McpError::Fail;
+
+    const Cnf& cnf = (br == CanBitrate::Bps500k) ? kCnf8MHz500k : kCnf8MHz125k;
+    writeReg(MCP_CNF1, cnf.c1);
+    writeReg(MCP_CNF2, cnf.c2);
+    writeReg(MCP_CNF3, cnf.c3);
+
+    bitMod(MCP_TXB0CTRL, 0x03, 0x03);
+    bitMod(MCP_TXB1CTRL, 0x03, 0x02);
+    bitMod(MCP_TXB2CTRL, 0x03, 0x01);
+
+    writeReg(MCP_CANINTE, CANINTF_RX0IF | CANINTF_RX1IF);
+    bitMod(MCP_RXB0CTRL, RXBnCTRL_RXM_MASK | RXB0CTRL_BUKT,
+                       RXBnCTRL_RXM_STDEXT | RXB0CTRL_BUKT);
+    bitMod(MCP_RXB1CTRL, RXBnCTRL_RXM_MASK, RXBnCTRL_RXM_STDEXT);
+
+    setSnifferFilters();
+    return setListenOnlyMode();
+}
+
 bool Mcp2515::hasRx() {
     // INT pin low => an interrupt is pending. Cheap poll, no status read needed.
     return gpio_get(pins_.interrupt) == 0;
