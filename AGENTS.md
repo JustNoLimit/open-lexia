@@ -188,12 +188,9 @@ değişmedi.
 - **Hiçbiri gerçek araçta denenmedi.** Bu ortamda araç/CAN bus yok; `hwtest` ve `gsniff` ile aynı
   durumdayız: mantık host testiyle doğrulandı, fiziksel doğrulama kullanıcıya kalıyor.
   Özellikle ISO-TP akış kontrolü, MCP2515 TX önceliği ve flash sırası araçta teyit edilmeli.
-- **PSA BSI aktüatör testi RoutineControl ID'leri hâlâ bilinmiyor.** ludwig-v, prototux/PSA-RE ve
-  Melnik-Alex/PSA_CAN'de kamuya açık kaynak yok. [actuator_catalog.hpp](include/psa/actuator_catalog.hpp)
-  bilerek sadece **isim** taşıyor, ID taşımıyor — yanlış ID'yi gerçek araçta ateşlemek güvenli değil.
-- **[ecu_params.hpp](include/psa/ecu_params.hpp)'deki `0x3E01`-`0x3E05` aktüatör ID'lerinin kaynağı
-  yok** (marş rölesi, yakıt pompası, fan, kızdırma bujisi). Araçta doğrulanana kadar şüpheli
-  sayılmalı — bunlar gerçekten fiziksel aktüatör tetikliyor.
+- **Aktüatör test ID'leri — BSM removed from kEcuTable** (not addressable separately
+  from BSI), `kBsmActuatorTests` array (0x3E01-0x3E05) deleted from `ecu_params.hpp` 
+  as dead code with no verified source.
 - `ecu_params.hpp`'deki **BSM bloğu adreslenebilir değil** (BSM, BSI'nın adresinde cevap veriyor;
   §0'da kEcuTable'dan çıkarılmıştı). Referans veri olarak duruyor, hiçbir yerden erişilmiyor.
   BMF'ye birleştirmeden önce araçta doğrulanmalı — o adresin arkasındaki yanlış ECU'ya yazmak
