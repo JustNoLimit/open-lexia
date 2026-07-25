@@ -62,6 +62,12 @@ button:disabled { opacity:.4; cursor:not-allowed; }
   padding:8px 16px; border-radius:7px; letter-spacing:.02em;
 }
 .btn-scan:hover:not(:disabled){ background:#16c9ba; }
+.btn-sniff {
+  background:#5a4ebd; color:#f0edff; border:0; font-weight:700;
+  padding:8px 16px; border-radius:7px; letter-spacing:.02em;
+}
+.btn-sniff:hover:not(:disabled){ background:#6c5fcf; }
+.btn-sniff.active { box-shadow:0 0 0 2px #8a7fff; }
 
 /* ---- Workspace ---- */
 .workspace { display:flex; flex:1 1 auto; min-height:0; }
@@ -205,12 +211,19 @@ td.code { font-family:var(--mono); color:var(--accent); }
   font-size:12px; margin-bottom:10px;
 }
 
-/* Guided sniffer */
-.step-banner {
-  background:rgba(18,179,166,.10); border:1px solid rgba(18,179,166,.4);
-  border-radius:8px; padding:12px 14px; font-size:14px; margin-bottom:14px; color:var(--txt);
+/* Sniff monitor */
+.sniff-rate-tabs { display:flex; gap:2px; }
+.sftab {
+  background:var(--panel2); color:var(--muted); border:1px solid var(--line2);
+  padding:7px 14px; font-size:12px; font-weight:600; cursor:pointer; border-radius:6px;
 }
-.step-banner b { color:var(--accent); }
+.sftab.active { background:var(--accent); color:#04211f; border-color:var(--accent); }
+.sftab:hover:not(.active) { color:var(--txt); }
+.sniff-feed {
+  background:var(--bg); border:1px solid var(--line2); border-radius:8px;
+  padding:14px; font-family:var(--mono); font-size:12px; line-height:1.6;
+  min-height:120px; overflow-y:auto; white-space:pre-wrap; word-break:break-word;
+}
 
 /* Console drawer */
 .console { flex:0 0 auto; background:var(--console-bg); border-top:1px solid var(--line2);

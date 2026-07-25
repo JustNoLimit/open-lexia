@@ -30,6 +30,9 @@
       <button class="theme-btn" id="themeToggle" title="Toggle light / dark theme" aria-label="Toggle theme">
         <span class="theme-icon">🌙</span>
       </button>
+      <button class="btn btn-sniff" id="btnSniff" title="Guided CAN signal sniffer (no ECU connect needed)">
+        Sniffer
+      </button>
       <button class="btn btn-scan" id="btnGlobalTest" title="Run Global Test (auto-scan every ECU)">
         Global&nbsp;Test
       </button>
@@ -70,7 +73,6 @@
         <button class="ftab" data-fn="actuators">Actuator tests</button>
         <button class="ftab" data-fn="config">Telecoding</button>
         <button class="ftab" data-fn="flash">Programming</button>
-        <button class="ftab" data-fn="sniff">Sniffer</button>
       </nav>
 
       <section class="panes">
@@ -150,56 +152,19 @@
           <button class="btn" id="btnFlashSend" disabled>Load S-records</button>
         </div>
 
-        <!-- Guided CAN sniffer: correlates a known physical action with the raw
-             broadcast bytes that move with it. Works on the raw bus directly —
-             no ECU connect/unlock needed. -->
+        <!-- CAN bus monitor (raw sniff, no ECU connection needed) -->
         <div class="pane" data-pane="sniff">
           <div class="pane-toolbar">
-            <select class="sel" id="sniffScenario">
-              <option value="climate">Climate controls</option>
-            </select>
-            <button class="btn" id="btnSniffRun">Run scenario</button>
-            <button class="btn" id="btnSniffNext" disabled>Next step ▸</button>
-            <span class="hint">Or use the ad-hoc capture below for anything not on a scenario.</span>
+            <button class="btn" id="btnSniffBack">← Back to diagnostics</button>
+            <div class="sniff-rate-tabs">
+              <button class="sftab active" data-rate="hs">HS (500k)</button>
+              <button class="sftab" data-rate="ls">LS (125k)</button>
+            </div>
+            <button class="btn ghost" id="btnSniffClear">Clear feed</button>
+            <span class="hint">Set bus speed, then physically connect the MCP2515 to the corresponding CAN bus.</span>
           </div>
-          <div class="step-banner" id="sniffStep">Pick a scenario and press <b>Run scenario</b>.</div>
-
-          <div class="pane-toolbar">
-            <select class="sel" id="sniffMode">
-              <option value="count">Counted (N presses)</option>
-              <option value="hold">Hold (steady value)</option>
-              <option value="sweep">Sweep (slow one-way change)</option>
-            </select>
-            <input class="sel" id="sniffN" type="number" min="1" max="255" value="5" style="width:70px" title="Expected press count">
-            <button class="btn ghost" id="btnSniffBase">Baseline</button>
-            <button class="btn" id="btnSniffStart">Start</button>
-            <button class="btn danger" id="btnSniffStop">Stop</button>
-            <button class="btn ghost" id="btnSniffClear">Clear</button>
-          </div>
-
-          <table class="grid" id="sniffLearnedTable" hidden>
-            <thead><tr><th>Signal</th><th>Bus</th><th>ID</th><th>Byte</th></tr></thead>
-            <tbody id="sniffLearnedBody"></tbody>
-          </table>
-          <table class="grid" id="sniffCandTable" hidden>
-            <thead><tr><th>Bus</th><th>ID</th><th>Byte</th><th>Chg</th><th>Min</th><th>Max</th><th>Base</th><th></th></tr></thead>
-            <tbody id="sniffCandBody"></tbody>
-          </table>
-          <p class="muted" id="sniffEmpty">No capture yet. Run a scenario, or Baseline then Start below.</p>
-
-          <div class="pane-toolbar">
-            <input class="sel" id="sniffWatchId" placeholder="hex ID (e.g. 1D0)" style="width:120px">
-            <select class="sel" id="sniffWatchBus">
-              <option value="ls">LS</option>
-              <option value="hs">HS</option>
-            </select>
-            <button class="btn ghost" id="btnSniffWatch">Watch</button>
-            <button class="btn ghost" id="btnSniffWatchOff">Watch off</button>
-            <span class="hint">Live-dumps one ID's 8 bytes to the console below.</span>
-          </div>
-          <div class="pane-toolbar">
-            <button class="btn ghost" id="btnSniffSave">Save to flash</button>
-            <button class="btn ghost" id="btnSniffLoad">Load from flash</button>
+          <div class="sniff-feed" id="sniffFeed">
+            <p class="muted">Raw CAN frames will appear below in the console. Select HS or LS for baud rate, then turn on <strong>sniff on</strong> from the console.</p>
           </div>
         </div>
       </section>

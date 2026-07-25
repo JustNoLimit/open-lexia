@@ -5,6 +5,48 @@
 
 ---
 
+## 0f. GÜNCELLEME — 2026-07-26 (Sniffer yeniden tasarım, ikinci MCP2515 kaldırıldı, CAN ID düzeltmeleri)
+
+### Mimaride köklü değişiklik: tek MCP2515 yeterli
+
+- **İkinci MCP2515'e gerek kalmadı.** Lexia 3 gibi: CAN-HS (OBD pin 3/8) tek bus. CAN-LS teşhisi
+  BSI gateway üzerinden yapılır (isteğe bağlı fiziksel tap). Sniffer HS/LS tab'ları ile kullanıcı
+  aynı MCP2515'i hangi bus'a taktıysa o hızda (`gsniff rate hs/ls`) çalıştırır.
+  ([can_manager.hpp](include/psa/can_manager.hpp) zaten `ready()` guard'ı ile opsiyoneldi.)
+- **Sniffer artık raw CAN monitor.** ECU fonksiyon tab'larının içinden çıkarıldı, üst bar'da
+  "Sniffer" butonu eklendi (Global Test'in solunda). Tıklayınca sidebar/ECU bar/funcTabs gizlenir,
+  sniff pane full-screen açılır. "← Back to diagnostics" ile ECU görünümüne dönülür.
+  ([dashboard.html](dashboard/dashboard.html#L33), [dashboard.js](dashboard/dashboard.js#L1281))
+- **HS (500k) / LS (125k) seçici.** Sniff içinde iki alt-sekme; tıklayınca MCP2515 baud rate'ini
+  değiştiren `gsniff rate hs/ls` komutu gönderilir (firmware handler henüz eklenmedi — TODO)
+- **Guided sniff UI tamamen kaldırıldı.** Senaryo/Count/Hold/Sweep/Watch/Save/Load butonları ve
+  step banner, learned/candidates tabloları dashboard'dan silindi. Backend `gsniff` shell komutları
+  firmware'de kalır (ileride tekrar kullanılabilir).
+- **Önemli: kullanıcı fiziksel olarak tek MCP2515 kablosunu hangi bus'a takarsa o bus'ı dinler.**
+  OBD2 pin 3/8'den CAN-HS; CAN-LS için BSI konnektöründen fiziksel tap gerekir.
+
+### CAN broadcast decoder düzeltmeleri (JustNoLimit/citroen-can referansı)
+
+Kaynak: https://github.com/JustNoLimit/citroen-can — C5 Mk1 FL için verified CAN ID veritabanı.
+- **0x0F6 ext_temp byte offset düzeltildi** (d[5]→d[6]). Eklendi: coolant (d[1]-40), odometer (d[2:4])
+- **0x208 tamamen yanlıştı**: gaz pedalı % × 0.392 + tork (önceden RPM+throttle+brake sanıyordu)
+- **0x488 oil temp byte düzeltildi** (d[5]→d[1])
+- **30+ yeni CAN ID decoderı eklendi.** HS: 0x120, 0x128, 0x168(detaylı), 0x305, 0x348, 0x44D,
+  0x468, 0x108, 0x34D, 0x38D, 0x072, 0x0A8, 0x217. LS: 0x1E1, 0x1A1, 0x221, 0x228, 0x336/3B6/2B6,
+  0x3E5, 0x2A5, 0x225, 0x125, 0x1A8, 0x0D6, 0x220, 0x227, 0x5E5, 0x1A5, 0x0A4, 0x165.
+  ([main.cpp](src/main.cpp#L17))
+- **Dokümantasyon güncellendi.** `docs/psa_can_reference.md` bölüm 2: HS→17 ID, LS→34 ID, Verification
+  seviyeleri (TESTED/COMMUNITY) eklendi.
+
+### Kalan işler
+
+- **`gsniff rate` firmware handler'ı yok.** MCP2515 baud rate'ini runtime'da değiştirip sniff modunu
+  açacak. Şu an JS komutu gönderiyor ama firmware tanımıyor.
+- ECU adres tablosu doğrulandı, değişmedi.
+- Hiçbir değişiklik gerçek araçta denenmedi (ISO-TP akış kontrolü, MCP2515 öncelik, flash sırası).
+
+---
+
 ## 0e. GÜNCELLEME — 2026-07-25 (denetim + düzeltme turu: ISO-TP akış kontrolü, stack, flash güvenliği)
 
 Kod tabanı 10 alt sistemde ajan filosuyla denetlendi, her bulgu düşmanca bir doğrulama turundan
