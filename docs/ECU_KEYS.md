@@ -247,4 +247,22 @@
 | AMPLI_AUDIO | A7D8 |
 | AMPLI | 0000 |
 
+### NOTES — C5 Mk1 FL families with no documented PIN
+
+The following ECUs in this project have `0x0000` (unknown). They either share no
+entry in the public database or the C5 Mk1 variant is not recorded anywhere:
+
+| Family | Actual ECU | Possible match | Notes |
+|---|---|---|---|
+| CLIM | Behr/Visteon HVAC | none found | KWP-era; may not need 27xx for coding |
+| HDC | COM2000 series | none found | LIN peripheral to BSI; unlock not applicable |
+| SPNEU | Hydractive suspension | none found | Not Tyre Pressure (that's DSG=AC58). LIN? |
+| AUTORADIO | RD3/RD4 | RD6=BF13 (too new) | RD3/RD4 era may not implement 27xx |
+| ADC | Immobiliser/Keyless | none found | Security-critical; no public key |
+| MDP_CONDUCT | Brose seat module | none found | LIN peripheral; no 27xx |
+| MDP_PASSAG | Brose seat module | none found | same |
+| PROJECTEURS | Headlight corrector | BEMP_UDS=EAD7 (too new) | KWP-era; no public key |
+| AIDE_STAT | Parking aid (AAS) | AAS_UDS_G6=B6F0 (too new) | KWP-era AAS not documented |
+| BML | Battery management | SDCM=A8EE **(added)** | Shares CAN IDs 741:641 |
+
 > ® Ludwig V. <https://github.com/ludwig-v>

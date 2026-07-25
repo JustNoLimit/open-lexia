@@ -52,6 +52,8 @@ inline uint16_t getEcuPin(const char* family) {
     if (equals(family, "DIRECTN")) return 0xBF62;  // DAE (KWP-era EPS, not *_UDS2 variants)
     if (equals(family, "ABRASR")) return 0xABFB;   // ESP81 (pre-2010 Bosch ESP, closest to MK60 era)
     if (equals(family, "DSG")) return 0xAC58;      // DSG_UDS — weakest guess, source only lists a UDS variant
+    // Battery management: shares CAN IDs with SDCM (ADML ECU, 741:641).
+    if (equals(family, "BML")) return 0xA8EE;      // SDCM
 
     // Everything else: no source-verified family default. Use `pin <hex>`.
     return 0x0000;
