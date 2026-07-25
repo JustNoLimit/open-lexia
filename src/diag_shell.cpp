@@ -576,10 +576,7 @@ void DiagShell::cmdHwtest() {
         printf("[HWTEST]   FAIL (TX error)\n");
         return;
     }
-#ifdef HOST_TEST
-#else
     sleep_ms(10);
-#endif
 
     CanFrame rx{};
     if (!m.hasRx()) {
