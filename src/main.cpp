@@ -121,9 +121,12 @@ void decode_sniffed(psa::Bus bus, const psa::CanFrame& f) {
                (f.data[1] >> 3) & 1, (f.data[1] >> 2) & 1, (f.data[1] >> 4) & 1, (f.data[1] >> 5) & 1);
     } break;
     case 0x1A1: if (f.dlc >= 2) {
-        printf("[LS] 1A1 doors(fl/fr/rl/rr/trunk/bonnet)=%d/%d/%d/%d/%d/%d\n",
+        printf("[LS] 1A1 doors(fl/fr/rl/rr/trunk/bonnet)=%d/%d/%d/%d/%d/%d"
+               " lights(park/low/high/turnL/turnR)=%d/%d/%d/%d/%d\n",
                f.data[0] & 1, (f.data[0] >> 1) & 1, (f.data[0] >> 2) & 1,
-               (f.data[0] >> 3) & 1, (f.data[0] >> 4) & 1, (f.data[0] >> 5) & 1);
+               (f.data[0] >> 3) & 1, (f.data[0] >> 4) & 1, (f.data[0] >> 5) & 1,
+               f.data[1] & 1, (f.data[1] >> 1) & 1, (f.data[1] >> 2) & 1,
+               (f.data[1] >> 3) & 1, (f.data[1] >> 4) & 1);
     } break;
     case 0x221: if (f.dlc >= 5) {
         printf("[LS] 221 range=%ukm\n", (unsigned)((f.data[3] << 8) | f.data[4]));

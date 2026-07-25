@@ -195,8 +195,8 @@ değişmedi.
   §0'da kEcuTable'dan çıkarılmıştı). Referans veri olarak duruyor, hiçbir yerden erişilmiyor.
   BMF'ye birleştirmeden önce araçta doğrulanmalı — o adresin arkasındaki yanlış ECU'ya yazmak
   geri alınabilir bir hata değil.
-- CAN2004/C5 Mk1 FL için **kilometre sayacı ve far/sinyal durumu broadcast çerçevesi bulunamadı**
-  hiçbir kamuya açık kaynakta. Canlı capture gerekiyor.
+- **Kilometre sayacı:** `0x0F6` d[2:4] — zaten decode ediliyor.
+  **Far/sinyal:** `0x1A1` d1 (park/low/high/turnL/turnR) — decode eklendi.
 - **Ölçüm tek parametre** mimari kısıtı (§6) değişmedi.
 - (Yok) `tests/test_psa.cpp` başındaki derleme komutu da bu turda güncellendi.
 
