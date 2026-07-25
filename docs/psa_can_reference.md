@@ -65,38 +65,75 @@ Notes:
 
 ## 2. Critical CAN IDs (CAN2004 / C5 Mk1 FL)
 
-These IDs come from `ludwig-v/arduino-psa-comfort-can-adapter` (the CAN2004 side of
-its bridge) and `Melnik-Alex/PSA_CAN`. IDs are 11-bit standard frames. "Bus" marks
-which MCP2515 sees them on.
+These IDs come from cross-referencing `ludwig-v/arduino-psa-comfort-can-adapter`,
+`prototux/PSA-CAN-RE`, `Melnik-Alex/PSA_CAN`, `autowp`, `JustNoLimit/citroen-can`.
+IDs are 11-bit standard frames. "TESTED" = verified on C5 Mk1 FL or Peugeot 207 in
+the wild.
 
 ### 2.1 CAN-HS (500 kbps) — vehicle dynamics / powertrain / alerts
 
-| ID | Len| Bus | Signal | Decode |
-|---|---|---|---|---|
-| `0x0B6` | 8 | HS | **Engine RPM + vehicle speed** | `rpm = ((d[0]<<8)|d[1]) * 0.125`; `speed_kmh = ((d[2]<<8)|d[3]) * 0.01` |
-| `0x0E6` | <8| HS | **ABS status** | d0=status/alerts; d1..d4 wheel rotations; d5=battery voltage (ABS); d6=STT/slope/emergency-braking; d7=checksum/counter |
-| `0x168` | 8 | HS | **Instrument panel (WIP) / alerts** | d0..d5 alerts; d6 bits 7..5 = gearbox report; bit6=EMF availability; bit5=ambiance |
-| `0x120` | 8 | HS | **Alerts journal / diagnostic popups** | 3 x 8-byte blocs (see comfort-adapter `sendPOPup`): oil pressure, engine temp, braking, ESP, airbag, ABS, particulate filter, suspension, doors, lights, tyre pressure... |
-| `0x217` | 8 | HS | **Cluster status (CMB)** | Raw cluster state, cached and forwarded |
-| `0x15B` | — | HS | (do-not-bridge marker) | Internal cross-network marker, ignore for sniffing |
+| ID | Len | Signal | Decode | Verified |
+|-----|------|--------|--------|----------|
+| `0x0B6` | 8 | **Engine RPM + vehicle speed** | `rpm = ((d[0]<<8)\|d[1]) * 0.125`; `speed_kmh = ((d[2]<<8)\|d[3]) * 0.01` | **TESTED** |
+| `0x0E6` | ≤8 | **ABS status** | d0=status(bit6=fault,bit5=active,bit1=fluid); d1-d4=wheel rotations; d5=battery; d6=STT/slope/emergency-braking; d7=checksum | **TESTED** |
+| `0x120` | 8 | **Alerts journal** | 3×8-byte blocks: oil, temp, ESP, airbag, ABS, suspension, doors, lights, tyre | **TESTED** |
+| `0x168` | 8 | **Warning lights** | d0: bit7=CheckEng, bit6=STOP, bit5=oil, bit4=batt, bit3=handbrake, bit2=ABS; d6 bit7-5=gearbox, bit6=EMF avail | **TESTED** |
+| `0x128` | 8 | **Gearbox display** | d6 bits4-7=gear pos (0=P,1=R,2=N,3=D,4-9=6-1); d7 bits4-6=auto mode; d0 bit5=handbrake | **TESTED** |
+| `0x217` | 8 | **Cluster status / buttons** | Dimmer, dash button presses (AAS, AC, airbag, blindspot, brightness, auto-check, black-panel) | **TESTED** |
+| `0x072` | 8 | **Immobilizer query (ECU→BSI)** | Engine ECU requests immo authentication | COMMUNITY |
+| `0x0A8` | 8 | **Immobilizer response (BSI→ECU)** | BSI validates key, enables start | COMMUNITY |
+| `0x108` | 8 | **Engine ECU heartbeat** | General status + comm heartbeat | COMMUNITY |
+| `0x208` | 4+ | **Engine Dynamic Data 1** | d0=gas pedal % × 0.392; d[1:2]=torque Nm | COMMUNITY |
+| `0x305` | 3 | **Steering angle (ESP)** | d[0:1]=steering angle sensor | COMMUNITY |
+| `0x348` | 8 | **Engine Dynamic Data 2** | Turbo boost, manifold air temp, injection rate | COMMUNITY |
+| `0x34D` | 4+ | **ESP/ASR intervention** | Wheel-slip state, ESP OFF button | COMMUNITY |
+| `0x38D` | 4+ | **Yaw rate** | Lateral G-force, yaw rate sensor | COMMUNITY |
+| `0x44D` | 8 | **Wheel speeds (ABS)** | d[0:1]=FL; d[2:3]=FR; d[4:5]=RL; d[6:7]=RR × 0.01 km/h | COMMUNITY |
+| `0x468` | 8 | **Engine Dynamic Data 3** | Oil temp, EGT, DPF soot % | COMMUNITY |
+| `0x488` | 3+ | **Engine General Data** | d0=coolant = d[0]-40; d1=oil temp °C | COMMUNITY |
+| `0x0E1` | 7 | **Parking-aid beeps (AAS)** | Beep direction L/R, duration | COMMUNITY |
+| `0x15B` | — | (do-not-bridge marker) | Internal cross-network marker | — |
 
 ### 2.2 CAN-LS (125 kbps) — comfort / body / infotainment
 
-| ID |Len| Bus | Signal | Decode |
-|---|---|---|---|---|
-| `0x036` | 8 | LS | **Economy mode + panel brightness** | `economy_mode = bit(d[2],7)`; `brightness = d[3]` (0x20..0x2F = panel-dimmed range) |
-| `0x0F6` | 8 | LS | **Ignition + exterior temperature** | `ignition_on = d[0] > 128`; `ext_temp_c = (d[5] >> 1) - 40` (offset -40°C) |
-| `0x1D0` | 7 | LS | **Climate control (BSI)** | d0=AC mode (0x00 auto-on, 0x02 off, 0x11/0x21 demist-on, 0xA2 fan-off); d2=fan speed (0x0F=off); d3=fan position (0x10/0x20/0x30/0x40/0x50/0x60/0x70/0x80); d4=recycle/demist; d5=left temp; d6=right temp (equal => MONO) |
-| `0x21F` | 3 | LS | **Steering-wheel buttons (generic)** | d0=button bits; d1=scroll/rotary value |
-| `0x0A2` | — | LS | **Steering-wheel buttons (C4 I / C5 Mk1 FL layout)** | d1 bits: bit3=MENU, bit2=MODE/NAV, bit4=ESC/APPS, bit5=OK/PHONE (type-dependent). The `arduino-psa-comfort-can-adapter` labels this "C5 X7" — see naming note above; on the target vehicle (PF3 facelift, CAN2004) it is the same physical COM2000 button layout. |
-| `0x122` | 8 | LS | **FMUX buttons (emulated)** | Forged menu/volume buttons forwarded to head unit; d5=0x02 source tag |
-| `0x221` | 8 | LS | **TRIP computer** | Reset / trip button state (bit3 = TRIP press) |
-| `0x228` | 2 | LS | **Clock** | d0=hour, d1=minute |
-| `0x336` | 3 | LS | **VIN chars 1-3** (ASCII) | e.g. `V`,`F`,`3` |
-| `0x3B6` | 6 | LS | **VIN chars 4-9** (ASCII) | OEM code + serial prefix |
-| `0x2B6` | 8 | LS | **VIN chars 10-17** (ASCII) | Last 8 of VIN |
-| `0x5E5` | 8 | LS | **EMF / display version** | Hardware/software version of the dash display |
-| `0x350` | 8 | LS | **Climate -> CAN2010 output** (forge target) | Re-encoded climate for CAN2010 head units (A/C on/off, L/R temp, fan speed, position) |
+| ID | Len | Signal | Decode | Verified |
+|-----|------|--------|--------|----------|
+| `0x036` | 8 | **Economy mode + brightness** | `econ = bit(d[2],7)`; `brightness = d[3]` (0x20..0x2F=dimmed) | **TESTED** |
+| `0x0F6` | 8 | **BSI Data Slow + SWC** | `ign = d[0]>128`; SWC: d0 bits 0/1/2/3=V+/V-/Seek+/Seek-, bit4=Source; `coolant = d[1]-40`; `odo = (d[2]<<16)\|(d[3]<<8)\|d[4]`; fuel=d[5]; `ext_temp = (d[6]/2)-40` | **TESTED** |
+| `0x1E1` | 2+ | **Ignition & Power** | d0: 0x00=off, 0x01=ACC, 0x04=on, 0x08=cranking; d1=economy mode | COMMUNITY |
+| `0x1D0` | 7 | **Climate control** | d0=mode(0x00=auto+AC,0x02=AC off,0xA2=off); d2=fan(0x0F=off,0-7=spd1-8); d3=distribution(0x10=none,0x20=feet,0x40=face,0x80=all); d4=recycle(0x30)/demist(0x10); d5=left setpoint; d6=right setpoint | **TESTED** |
+| `0x21F` | 3 | **Radio stalk buttons** | d0: bit1=Source, bit2=Vol-, bit3=Vol+, bit6=Seek-, bit7=Seek+; d1=scroll | **TESTED** |
+| `0x0A2` | 5 | **COM2000 buttons** | d1: bit2=MODE/NAV, bit3=MENU, bit4=ESC/APPS, bit5=OK/PHONE | **TESTED** |
+| `0x122` | 8 | **FMUX buttons (emulated)** | Forged menu/volume forwarded to head unit; d5=0x02 source tag | **TESTED** |
+| `0x1A1` | 8 | **Door & Light Status** | d0 bits: 0=driver,1=pass,2=RL,3=RR,4=trunk,5=bonnet; d1=lights (park/low/high/turn) | **TESTED** |
+| `0x1A8` | 8 | **Cruise setpoint** | d1=setpoint value | **TESTED** |
+| `0x221` | 8 | **Trip consumption + range** | d[3:4]=range km; d[1:2]=consumption×0.1 L/100km | **TESTED** |
+| `0x228` | 2 | **Clock** | d0=hour(bits0-4), d1=minute(bits0-5) | **TESTED** |
+| `0x336` | 3 | **VIN chars 1-3 (ASCII)** | WMI e.g. VF7 | **TESTED** |
+| `0x3B6` | 6 | **VIN chars 4-9 (ASCII)** | OEM + serial prefix | **TESTED** |
+| `0x2B6` | 8 | **VIN chars 10-17 (ASCII)** | Last 8 of VIN | **TESTED** |
+| `0x3A7` | 7 | **Service indicator** | d[3:4]=km remaining ×20; d[5:6]=days remaining; d0 bit7=service due | **TESTED** |
+| `0x3E5` | 6 | **EMF menu navigation** | d0: bit6=MENU, bit4=phone, bit0=AC; d1: bit6=TRIP, bit4=mode, bit0=audio; d2: bit6=OK, bit4=ESC; d5: up/down/right/left | **TESTED** |
+| `0x2A5` | 8 | **RDS Radio Text** | 8 ASCII bytes, station name / RDS scroll | **TESTED** |
+| `0x225` | 4+ | **Radio Tuner** | d2 bits4-7=band (0=FMAST,1=FM1,2=FM2,3=FMAST,4=AM); freq = 50 + ((d[3]\|d[4]<<8)) × 0.05 MHz | **TESTED** |
+| `0x125` | 8 | **Radio/CD Text List** | Track + author names (20 ASCII bytes each) | **TESTED** |
+| `0x0A4` | 8 | **Radio Status** | Power state, source (AM/FM/CD/AUX) | COMMUNITY |
+| `0x165` | 7 | **Radio Sound Mode** | Bass/treble/EQ + routing | **TESTED** |
+| `0x1A5` | 2 | **Volume Level** | d0=0-30 | **TESTED** |
+| `0x0D6` | 5+ | **Gearbox position** | P,R,N,D,M + Sport/Snow mode | COMMUNITY |
+| `0x220` | 8 | **Door / Hood / Flap** | Per-door open bits | **TESTED** |
+| `0x227` | 8 | **Dashboard button LEDs** | AC-on, recycle, child-lock, ESP, AAS, overspeed, fuel-info | **TESTED** |
+| `0x2E1` | ? | **BSI Menu Config + Suspension** | Auto wipers, DRL, follow-me-home; suspension pos + auto-lock | **TESTED** |
+| `0x361` | ? | **Personalisation** | Ambient, auto-light, blindspot, AAS, auto e-brake | **TESTED** |
+| `0x5E5` | 8 | **EMF / display version** | HW/SW version of dash display | **TESTED** |
+| `0x350` | 8 | **Climate → CAN2010 forge** | Re-encoded climate for CAN2010 head units | REFERENCE |
+| `0x1E0` | 2+ | **Cruise stalk buttons** | SET+, SET-, RES, PAUSE (separate from setpoint 0x1A8) | COMMUNITY |
+| `0x0E1` | 7 | **Parking-aid beeps (AAS)** | Beep direction L/R, duration (on LS bus) | COMMUNITY |
+| `0x3F6` | 4+ | **Clock & Date Config** | System clock/date sync from EMF/BSI | COMMUNITY |
+| `0x261` | 7 | **Trip Memory 2** | Distance, avg consumption, avg speed | **TESTED** |
+| `0x2A1` | 7 | **Trip Memory 1** | Distance, avg consumption, avg speed | **TESTED** |
+| `0x0E8` | ? | **Doors + auto lights/wiper** | Auto-light & wiper alert enable, alarm, doors (unverified layout) | UNVERIFIED |
+| `0x161` | 8 | **Oil + Fuel Level** | Oil temp, oil level, fuel level (unverified layout) | UNVERIFIED |
 
 ### 2.3 CAN2010 IDs (for cross-reference / newer head units)
 
