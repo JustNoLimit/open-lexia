@@ -38,7 +38,9 @@ void DiagShell::init(CanManager* can) {
     tp_.reset();
     unlocked_ = false;
     live_polling_active_ = false;
-    live_param_id_ = 0;
+    live_param_count_ = 0;
+    live_param_idx_ = 0;
+    for (auto& id : live_param_ids_) id = 0;
     last_poll_us_ = 0;
     scan_active_ = false;
     pdi_active_ = false;
@@ -136,11 +138,13 @@ bool DiagShell::poll() {
         }
     }
 
-    // Send live poll if active
-    if (live_polling_active_ && state_ == State::Connected) {
+    // Send live poll if active — round-robin through the active param list
+    if (live_polling_active_ && state_ == State::Connected && live_param_count_ > 0) {
         uint64_t now = get_time_us();
         if (last_poll_us_ == 0 || now - last_poll_us_ >= 250000) {
-            Req req = readLiveData(ecu_->proto, live_param_id_);
+            uint16_t id = live_param_ids_[live_param_idx_];
+            live_param_idx_ = (live_param_idx_ + 1) % live_param_count_;
+            Req req = readLiveData(ecu_->proto, id);
             sendReq(req);
             state_ = State::WaitingResponse;
             response_start_us_ = now;
@@ -443,6 +447,8 @@ void DiagShell::cmdConnect(const char* arg) {
     manual_pin_valid_ = false;
     pending_count_ = 0;
     live_polling_active_ = false;
+    live_param_count_ = 0;
+    live_param_idx_ = 0;
 
     printf("[DIAG] Connecting to %s (%03X:%03X, %s) on %s bus...\n",
            ecu_->family, ecu_->emit_id, ecu_->recv_id,
@@ -481,6 +487,8 @@ void DiagShell::cmdDisconnect() {
     manual_pin_valid_ = false;
     pending_count_ = 0;
     live_polling_active_ = false;
+    live_param_count_ = 0;
+    live_param_idx_ = 0;
     config_readall_active_ = false;
 }
 
@@ -1219,19 +1227,22 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
             }
         }
 
-        if (header_len > 0 && resp_param_id == live_param_id_) {
-            const LiveDataParam* param = findParam(p, live_param_id_);
-            if (!param) param = findParamInCategories(live_param_id_);
-            if (param && param->decode) {
-                float val = param->decode(pdu + header_len, len - header_len);
-                printf("[LIVE] %s: %.1f %s\n", param->name, val, param->unit);
-            } else {
-                // No colon here on purpose: the dashboard's measurement parser is
-                // /^\[LIVE\] (.+): ([-0-9.]+) ?(.*)$/, so a colon would make it
-                // read the first hex byte as the measured value and plot it.
-                printf("[LIVE] ID %04X undecoded raw = ", resp_param_id);
-                printHex(pdu + header_len, len - header_len);
-                printf("\n");
+        if (header_len > 0) {
+            bool in_list = false;
+            for (int i = 0; i < live_param_count_; ++i) {
+                if (live_param_ids_[i] == resp_param_id) { in_list = true; break; }
+            }
+            if (in_list) {
+                const LiveDataParam* param = findParam(p, resp_param_id);
+                if (!param) param = findParamInCategories(resp_param_id);
+                if (param && param->decode) {
+                    float val = param->decode(pdu + header_len, len - header_len);
+                    printf("[LIVE] %s: %.1f %s\n", param->name, val, param->unit);
+                } else {
+                    printf("[LIVE] ID %04X undecoded raw = ", resp_param_id);
+                    printHex(pdu + header_len, len - header_len);
+                    printf("\n");
+                }
             }
             return;
         }
@@ -1652,11 +1663,19 @@ void DiagShell::cmdLive(const char* arg) {
         for (const auto& p : kUdsParams) {
             printf("    %04X: %s (%s)\n", p.id, p.name, p.unit);
         }
+        if (live_param_count_ > 0) {
+            printf("\nActive: ");
+            for (int i = 0; i < live_param_count_; ++i)
+                printf("%04X ", live_param_ids_[i]);
+            printf("\n");
+        }
         return;
     }
 
     if (strcmp(arg, "off") == 0) {
         live_polling_active_ = false;
+        live_param_count_ = 0;
+        live_param_idx_ = 0;
         printf("[DIAG] Live polling stopped.\n");
         return;
     }
@@ -1676,16 +1695,34 @@ void DiagShell::cmdLive(const char* arg) {
         return;
     }
 
-    const LiveDataParam* param = findParam(ecu_->proto, param_id);
-    if (!param) {
-        printf("[DIAG] Warning: Parameter ID %04X not defined for this protocol, starting poll anyway.\n", param_id);
-    } else {
-        printf("[DIAG] Starting live polling for %s (ID %04X) every 250ms.\n", param->name, param->id);
+    // Toggle: if already in list, remove it; otherwise add it.
+    for (int i = 0; i < live_param_count_; ++i) {
+        if (live_param_ids_[i] == param_id) {
+            for (int j = i; j < live_param_count_ - 1; ++j)
+                live_param_ids_[j] = live_param_ids_[j + 1];
+            live_param_count_--;
+            if (live_param_idx_ >= live_param_count_) live_param_idx_ = 0;
+            printf("[DIAG] Removed %04X from live poll list.\n", param_id);
+            if (live_param_count_ == 0) live_polling_active_ = false;
+            return;
+        }
     }
 
-    live_param_id_ = param_id;
+    if (live_param_count_ >= kMaxLiveParams) {
+        printf("[DIAG] Max %d live params reached.\n", kMaxLiveParams);
+        return;
+    }
+
+    live_param_ids_[live_param_count_++] = param_id;
     live_polling_active_ = true;
-    last_poll_us_ = 0; // Trigger poll immediately
+    last_poll_us_ = 0;
+
+    const LiveDataParam* param = findParam(ecu_->proto, param_id);
+    if (!param) {
+        printf("[DIAG] Added %04X to live poll list.\n", param_id);
+    } else {
+        printf("[DIAG] Added %s (%04X) to live poll list.\n", param->name, param->id);
+    }
 }
 
 void DiagShell::cmdActuator(const char* arg) {
@@ -1857,6 +1894,8 @@ void DiagShell::connectByIndex(uint8_t index) {
     manual_pin_valid_ = false;
     pending_count_ = 0;
     live_polling_active_ = false;
+    live_param_count_ = 0;
+    live_param_idx_ = 0;
 
     printf("[SCAN] %s (%03X:%03X, %s) on %s bus...\n",
            ecu_->family, ecu_->emit_id, ecu_->recv_id,
@@ -2086,8 +2125,11 @@ void DiagShell::cmdStatus() {
                                         ecu_->proto == Protocol::KWP_IS ? "KWP/IS" : "KWP/HAB") : "N/A");
     printf("Unlocked:   %s\n", unlocked_ ? "yes" : "no");
     printf("Live poll:  %s\n", live_polling_active_ ? "active" : "inactive");
-    if (live_polling_active_) {
-        printf("Live param: %04X\n", live_param_id_);
+    if (live_polling_active_ && live_param_count_ > 0) {
+        printf("Active params (%d): ", live_param_count_);
+        for (int i = 0; i < live_param_count_; ++i)
+            printf("%04X ", live_param_ids_[i]);
+        printf("\n");
     }
     printf("Sniff:      %s\n", sniff_enabled_ ? "on" : "off");
     printf("Gsniff:     %s\n", sniffer_.active() ? "capturing" : "idle");
@@ -2106,7 +2148,6 @@ void DiagShell::cmdMeas(const char* arg) {
                 printf("  %04X: %s (%s)\n", param.id, param.name, param.unit);
             }
         }
-        // Also show existing tables
         printf("\n[Legacy KWP]\n");
         for (const auto& p : kKwpParams) {
             printf("  %02X: %s (%s)\n", p.id, p.name, p.unit);
@@ -2122,11 +2163,19 @@ void DiagShell::cmdMeas(const char* arg) {
                    kPsaReferenceParams[i].name, kPsaReferenceParams[i].unit);
         }
         printf("\nStandard OBD-II Mode 01: use 'obd' (real, engine ECU).\n");
+        if (live_param_count_ > 0) {
+            printf("\nActive: ");
+            for (int i = 0; i < live_param_count_; ++i)
+                printf("%04X ", live_param_ids_[i]);
+            printf("\n");
+        }
         return;
     }
 
     if (strcmp(arg, "off") == 0) {
         live_polling_active_ = false;
+        live_param_count_ = 0;
+        live_param_idx_ = 0;
         printf("[DIAG] Measurement polling stopped.\n");
         return;
     }
@@ -2146,17 +2195,37 @@ void DiagShell::cmdMeas(const char* arg) {
         return;
     }
 
+    // Toggle: if already in list, remove it; otherwise add it.
+    for (int i = 0; i < live_param_count_; ++i) {
+        if (live_param_ids_[i] == param_id) {
+            for (int j = i; j < live_param_count_ - 1; ++j)
+                live_param_ids_[j] = live_param_ids_[j + 1];
+            live_param_count_--;
+            if (live_param_idx_ >= live_param_count_) live_param_idx_ = 0;
+            const LiveDataParam* p = findParam(ecu_->proto, param_id);
+            if (!p) p = findParamInCategories(param_id);
+            printf("[DIAG] Stopped %s (%04X).\n", p ? p->name : "UNKNOWN", param_id);
+            if (live_param_count_ == 0) live_polling_active_ = false;
+            return;
+        }
+    }
+
+    if (live_param_count_ >= kMaxLiveParams) {
+        printf("[DIAG] Max %d measurement parameters reached.\n", kMaxLiveParams);
+        return;
+    }
+
+    live_param_ids_[live_param_count_++] = param_id;
+    live_polling_active_ = true;
+    last_poll_us_ = 0;
+
     const LiveDataParam* param = findParam(ecu_->proto, param_id);
     if (!param) param = findParamInCategories(param_id);
     if (!param) {
-        printf("[DIAG] Warning: Parameter %04X not in database, starting poll anyway.\n", param_id);
+        printf("[DIAG] Added %04X to measurement list.\n", param_id);
     } else {
-        printf("[DIAG] Measuring %s (ID %04X) every 250ms.\n", param->name, param->id);
+        printf("[DIAG] Measuring %s (%04X).\n", param->name, param->id);
     }
-
-    live_param_id_ = param_id;
-    live_polling_active_ = true;
-    last_poll_us_ = 0;
 }
 
 void DiagShell::cmdObd(const char* arg) {

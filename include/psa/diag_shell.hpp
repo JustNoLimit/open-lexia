@@ -135,8 +135,11 @@ private:
     uint16_t        manual_pin_ = 0;        // user-supplied SecurityAccess PIN (`pin` cmd)
     bool            manual_pin_valid_ = false;
     uint8_t         pending_count_ = 0;     // consecutive 0x78 ResponsePending replies
+    static constexpr int kMaxLiveParams = 12;
     bool            live_polling_active_ = false;
-    uint16_t        live_param_id_ = 0;
+    uint16_t        live_param_ids_[kMaxLiveParams] = {};
+    int             live_param_count_ = 0;
+    int             live_param_idx_ = 0;
     uint64_t        last_poll_us_ = 0;
     // Standard OBD-II Mode 01 polling (single-frame, no session, HS bus).
     bool            obd_mode_ = false;

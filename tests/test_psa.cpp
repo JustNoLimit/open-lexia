@@ -576,6 +576,95 @@ static void test_flash_engine_uds() {
     printf("  flash_engine: UDS flashing steps state machine OK\n");
 }
 
+static void test_multi_param_live_polling() {
+    psa::CanManager can;
+    psa::DiagShell shell;
+    shell.init(&can);
+
+    // Connect to BMF (KWP)
+    shell.feedCommandLine("connect BMF");
+    psa::CanFrame resp;
+    resp.id = 0x652;
+    resp.dlc = 8;
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 1;
+    resp.data[1] = 0xC1;
+    shell.feedDiagFrame(resp);
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // Add first param (RPM 0x01)
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("live 01");
+    g_fake_time_us = 1000;
+    shell.poll();
+    assert(!psa::g_sent_frames.empty());
+    // Should request 21 01
+    assert(psa::g_sent_frames.back().data[1] == 0x21);
+    assert(psa::g_sent_frames.back().data[2] == 0x01);
+
+    // Respond to 0x01
+    resp.data[0] = 3;
+    resp.data[1] = 0x61;
+    resp.data[2] = 0x01;
+    resp.data[3] = 0x0A; // RPM = 10 * 32 = 320 rpm (rough)
+    psa::g_sent_frames.clear();
+    shell.feedDiagFrame(resp);
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // Add second param (Coolant 0x02)
+    shell.feedCommandLine("live 02");
+    // First poll should still send 0x01 (round-robin, idx was 0, now idx=1 after first add)
+    shell.poll();
+    if (psa::g_sent_frames.empty()) {
+        // Time hasn't advanced: pump clock forward
+        g_fake_time_us = 250001;
+        psa::g_sent_frames.clear();
+        shell.poll();
+    }
+    assert(!psa::g_sent_frames.empty());
+    assert(psa::g_sent_frames.back().data[2] == 0x01);
+
+    // Respond to 0x01
+    resp.data[2] = 0x01;
+    resp.data[3] = 0x82;
+    psa::g_sent_frames.clear();
+    shell.feedDiagFrame(resp);
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // Next poll sends 0x02 (idx=1 % 2 = 1)
+    g_fake_time_us = 500001; // advance past 250ms
+    psa::g_sent_frames.clear();
+    shell.poll();
+    assert(!psa::g_sent_frames.empty());
+    assert(psa::g_sent_frames.back().data[2] == 0x02);
+
+    // Respond to 0x02
+    resp.data[2] = 0x02;
+    resp.data[3] = 0x82;
+    psa::g_sent_frames.clear();
+    shell.feedDiagFrame(resp);
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // Remove 0x01 (toggle off)
+    shell.feedCommandLine("live 01");
+
+    // Poll should send 0x02 (only remaining)
+    g_fake_time_us = 750001;
+    psa::g_sent_frames.clear();
+    shell.poll();
+    assert(!psa::g_sent_frames.empty());
+    assert(psa::g_sent_frames.back().data[2] == 0x02);
+
+    // Stop all
+    shell.feedCommandLine("live off");
+    psa::g_sent_frames.clear();
+    shell.poll();
+    // No new request should be sent
+    assert(psa::g_sent_frames.empty());
+
+    printf("  diag_shell: multi-param live polling OK\n");
+}
+
 static void test_pin_override_flow() {
     psa::CanManager can;
     psa::DiagShell shell;
@@ -1173,6 +1262,7 @@ int main() {
     test_live_data_decoders();
     test_actuator_req_builders();
     test_diag_shell_live_data_and_actuator();
+    test_multi_param_live_polling();
     test_srecord_parser();
     test_flash_checksum();
     test_flash_engine_uds();

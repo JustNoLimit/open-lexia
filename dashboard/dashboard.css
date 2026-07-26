@@ -177,15 +177,25 @@ td.code { font-family:var(--mono); color:var(--accent); }
 .pill.ok { background:rgba(18,179,166,.18); color:var(--ok); }
 
 /* Measurements */
-.meas-live { display:flex; }
+.meas-layout { display:flex; flex-direction:column; gap:14px; }
 .meas-card {
   background:var(--panel); border:1px solid var(--line); border-radius:10px;
   padding:16px 18px; min-width:340px; max-width:560px; width:100%;
 }
+.meas-card.hidden { display:none; }
 .meas-name { color:var(--muted); font-size:13px; }
 .meas-value { font-size:34px; font-weight:700; font-family:var(--mono); margin:4px 0 10px; }
 .meas-unit { font-size:16px; color:var(--muted); }
 #measSpark { width:100%; height:90px; display:block; }
+.meas-table-wrap { width:100%; }
+.meas-table { width:100%; border-collapse:collapse; }
+.meas-table th { text-align:left; font-size:12px; color:var(--muted); padding:6px 10px; border-bottom:1px solid var(--line2); }
+.meas-table td { padding:7px 10px; border-bottom:1px solid var(--line2); font-size:14px; }
+.meas-table .mv { font-family:var(--mono); font-weight:600; }
+.meas-table .mu { color:var(--muted); font-size:12px; }
+.meas-table .del { color:var(--danger,#e34); cursor:pointer; background:none; border:0; font-size:16px; padding:0 4px; opacity:0.5; }
+.meas-table .del:hover { opacity:1; }
+.meas-table tr:hover td { background:var(--panel); }
 
 /* Actuators */
 .act-list { list-style:none; margin:0; padding:0; display:grid;

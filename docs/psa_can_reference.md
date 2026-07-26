@@ -407,17 +407,21 @@ HS/LS tabs in the dashboard just as before.
 
 ### 6.1 Pin assignment
 
-| Signal | MCP2515 |
-|---|---|
-| SPI peripheral | `spi0` |
-| SCK  | GP2  |
-| MOSI | GP3  |
-| MISO | GP4  |
-| CS   | GP5  |
-| INT  | GP6  |
+| Signal | Pico 2 W | TXS0108E | MCP2515 |
+|---|---|---|---|
+| SPI | `spi0` | — | — |
+| SCK  | GP2  | A2→B2 | SCK  |
+| MOSI | GP3  | A3→B3 | MOSI |
+| MISO | GP4  | B4→A4 | MISO |
+| CS   | GP5  | A5→B5 | CS   |
+| INT  | GP6  | A6→B6 | INT  |
 
 GP2-GP5 are the canonical `spi0` pins on the Pico pinout. INT uses GP6 with
 pull-up (MCP2515 INT is active-low). GP0/GP1 remain free for UART debug.
+
+A **TXS0108E** (8-channel auto-directional level shifter) sits between the Pico's
+3.3 V GPIO and the MCP2515's 5 V logic. The Pico side connects to the **A** ports,
+the MCP2515 side to the **B** ports. OE is tied to 3.3 V (always enabled).
 
 ### 6.2 Runtime baud rate change
 

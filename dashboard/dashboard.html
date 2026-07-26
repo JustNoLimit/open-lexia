@@ -103,15 +103,21 @@
         <div class="pane" data-pane="meas">
           <div class="pane-toolbar">
             <select class="sel" id="measSelect" disabled></select>
-            <button class="btn" id="btnMeasStart" disabled>Start</button>
-            <button class="btn ghost" id="btnMeasStop" disabled>Pause</button>
-            <span class="hint">The device polls one parameter at a time.</span>
+            <button class="btn" id="btnMeasAdd" disabled>+ Add</button>
+            <button class="btn ghost" id="btnMeasStop" disabled>Stop All</button>
+            <span id="measCount" class="hint"></span>
           </div>
-          <div class="meas-live">
-            <div class="meas-card">
+          <div class="meas-layout">
+            <div class="meas-card" id="measCard">
               <div class="meas-name" id="measName">—</div>
               <div class="meas-value"><span id="measValue">—</span> <span class="meas-unit" id="measUnit"></span></div>
               <canvas id="measSpark" width="520" height="90"></canvas>
+            </div>
+            <div class="meas-table-wrap" id="measTableWrap" style="display:none">
+              <table class="meas-table">
+                <thead><tr><th>Parameter</th><th>Value</th><th>Unit</th><th></th></tr></thead>
+                <tbody id="measBody"></tbody>
+              </table>
             </div>
           </div>
         </div>

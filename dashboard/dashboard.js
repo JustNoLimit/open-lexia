@@ -837,7 +837,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
 
   var st = {
     connected: false, ecu: null, unlocked: false, scanning: false,
-    dtcs: [], meas: { name: "—", unit: "", hist: [] },
+    dtcs: [], meas: { name: "—", unit: "", hist: [] }, activeParams: {},
     identReading: false,
     cfgRaw: {},          // zoneHex -> [byte,...] last read
     cfgPendingZone: null, // zone whose raw hex line we're expecting
@@ -994,7 +994,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     st.connected = on;
     $("indComms").classList.toggle("on", on);
     var dis = !on;
-    ["btnIdent", "btnReadDtc", "btnClearDtc", "btnMeasStart", "btnMeasStop",
+    ["btnIdent", "btnReadDtc", "btnClearDtc", "btnMeasAdd", "btnMeasStop",
       "btnCfgReadAll", "cfgSearch", "btnUnlock", "measSelect", "btnFlashStatus", "btnFlashCancel",
       "btnFlashEnd", "btnFlashSend"].forEach(function (b) { if ($(b)) $(b).disabled = dis; });
     if (!on) { setLock(false); $("ecuMeta").textContent = "disconnected"; }
@@ -1222,7 +1222,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     t.appendChild(tr);
   }
 
-  // ---- measurement sparkline ----
+  // ---- measurement sparkline + multi-param table ----
   function updateMeas(name, val, unit) {
     st.meas.name = name; st.meas.unit = unit;
     st.meas.hist.push(val); if (st.meas.hist.length > 120) st.meas.hist.shift();
@@ -1230,6 +1230,56 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     $("measValue").textContent = (Math.round(val * 100) / 100);
     $("measUnit").textContent = unit || "";
     drawSpark();
+    // Also update the multi-param table if this param is active
+    var rows = st.activeParams;
+    for (var key in rows) {
+      if (rows[key].name === name) {
+        rows[key].value = val;
+        rows[key].unit = unit;
+        var row = rows[key].row;
+        if (row) {
+          row.querySelector(".mv").textContent = (Math.round(val * 100) / 100);
+          row.querySelector(".mu").textContent = unit || "";
+        }
+        return;
+      }
+    }
+  }
+  function addMeasRow(paramId, paramName) {
+    var hex = paramId;
+    if (st.activeParams[hex]) return; // already in table
+    var tbody = $("measBody");
+    var tr = document.createElement("tr");
+    tr.innerHTML = '<td class="mn">' + esc(paramName) + '</td>'
+      + '<td class="mv">—</td>'
+      + '<td class="mu"></td>'
+      + '<td><button class="del" data-id="' + hex + '" title="Stop">×</button></td>';
+    tbody.appendChild(tr);
+    st.activeParams[hex] = { name: paramName, value: NaN, unit: "", row: tr };
+    tr.querySelector(".del").addEventListener("click", function () {
+      cmd("meas " + hex); // toggle off
+      removeMeasRow(hex);
+    });
+    $("measTableWrap").style.display = "";
+    $("measCount").textContent = Object.keys(st.activeParams).length + " active";
+  }
+  function removeMeasRow(hex) {
+    var entry = st.activeParams[hex];
+    if (entry && entry.row) { entry.row.remove(); }
+    delete st.activeParams[hex];
+    var n = Object.keys(st.activeParams).length;
+    if (n === 0) {
+      $("measTableWrap").style.display = "none";
+      $("measCard").classList.remove("hidden");
+    }
+    $("measCount").textContent = n ? n + " active" : "";
+  }
+  function clearMeasTable() {
+    $("measBody").innerHTML = "";
+    st.activeParams = {};
+    $("measTableWrap").style.display = "none";
+    $("measCard").classList.remove("hidden");
+    $("measCount").textContent = "";
   }
   function drawSpark() {
     var cv = $("measSpark"); if (!cv) return;
@@ -1254,6 +1304,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     clearTimeout(st.cfgTimer);
     st.cfgRaw = {}; st.cfgPendingZone = null; st.cfgReading = false; st.cfgQueue = null;
     st.meas.hist = []; $("measValue").textContent = "—"; $("measName").textContent = "—"; $("measUnit").textContent = ""; drawSpark();
+    clearMeasTable();
     $("identTable").querySelector("tbody").innerHTML = '<tr><td class="muted" colspan="2">Read the identification.</td></tr>';
   }
 
@@ -1305,11 +1356,18 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       if (confirm("Clear the stored faults of this ECU?")) cmd("clear");
     });
 
-    $("btnMeasStart").addEventListener("click", function () {
+    $("btnMeasAdd").addEventListener("click", function () {
       var o = $("measSelect").selectedOptions[0]; if (!o || !o.value) return;
-      st.meas.hist = []; cmd("meas " + o.value);
+      var hex = o.value, label = o.textContent || o.text;
+      cmd("meas " + hex);
+      addMeasRow(hex, label);
     });
-    $("btnMeasStop").addEventListener("click", function () { cmd("meas off"); });
+    $("btnMeasStop").addEventListener("click", function () {
+      cmd("meas off");
+      clearMeasTable();
+      st.meas.hist = [];
+      $("measValue").textContent = "—"; $("measName").textContent = "—"; $("measUnit").textContent = ""; drawSpark();
+    });
 
     $("btnCfgReadAll").addEventListener("click", cfgReadAll);
     $("cfgSearch").addEventListener("input", function () { cfgFilter(this.value); });
