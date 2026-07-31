@@ -3,7 +3,7 @@
 <!-- Open-source Lexia 3 / Diagbox-style diagnostic UI for the Citroen C5 Mk1 FL.
      Layout mirrors Lexia's working principle: Global Test -> ECU tree ->
      per-ECU function menu. Served gzipped from the Pico; no external assets. -->
-<div id="app">
+<div id="app" class="read-only">
 
   <!-- Supervisor bar (Lexia "Superviseur") -->
   <header class="superviseur">
@@ -30,8 +30,14 @@
       <button class="theme-btn" id="themeToggle" title="Toggle light / dark theme" aria-label="Toggle theme">
         <span class="theme-icon">🌙</span>
       </button>
-      <button class="btn btn-sniff" id="btnSniff" title="Guided CAN signal sniffer (no ECU connect needed)">
+      <button class="btn btn-rw rw-off" id="btnRw" title="Write protection. Read-only blocks zone writes, DTC clears, actuator tests and flashing.">
+        <span id="rwLabel">READ-ONLY</span>
+      </button>
+      <button class="btn btn-sniff" id="btnSniff" title="Raw CAN bus monitor (no ECU connect needed). Click again to return to diagnostics.">
         Sniffer
+      </button>
+      <button class="btn btn-help" id="btnHelp" title="Console command reference. Click again to return to diagnostics.">
+        Help
       </button>
       <button class="btn btn-scan" id="btnGlobalTest" title="Run Global Test (auto-scan every ECU)">
         Global&nbsp;Test
@@ -90,7 +96,7 @@
         <div class="pane" data-pane="faults">
           <div class="pane-toolbar">
             <button class="btn" id="btnReadDtc" disabled>Read faults</button>
-            <button class="btn danger" id="btnClearDtc" disabled>Clear faults</button>
+            <button class="btn danger needs-rw" id="btnClearDtc" disabled>Clear faults</button>
             <span class="count" id="dtcCount"></span>
           </div>
           <table class="grid" id="dtcTable">
@@ -119,6 +125,27 @@
                 <tbody id="measBody"></tbody>
               </table>
             </div>
+          </div>
+
+          <!-- Identifier discovery. The dropdown above only lists parameters we
+               already know; this finds the ones that are not in the database. -->
+          <div class="scan-block">
+            <div class="scan-head">
+              <strong>Identifier discovery</strong>
+              <span class="hint">Ask the ECU for every identifier in a range and see which answer. Read-only.</span>
+            </div>
+            <div class="scan-tools">
+              <label>from <input class="sel hexin" id="lidFrom" value="00" maxlength="4" placeholder="00"></label>
+              <label>to <input class="sel hexin" id="lidTo" value="FF" maxlength="4" placeholder="FF"></label>
+              <button class="btn" id="btnLidScan" disabled>Scan identifiers</button>
+              <button class="btn ghost" id="btnLidStop" disabled>Stop</button>
+              <button class="btn ghost" id="btnLidSave" disabled>⭳ Save results</button>
+              <span class="hint" id="lidStatus"></span>
+            </div>
+            <table class="meas-table lid-table" id="lidTable" style="display:none">
+              <thead><tr><th>ID</th><th>Length</th><th>Response</th><th></th></tr></thead>
+              <tbody id="lidBody"></tbody>
+            </table>
           </div>
         </div>
 
@@ -149,28 +176,136 @@
             A power loss during writing can permanently brick it.
           </div>
           <div class="pane-toolbar">
-            <button class="btn" id="btnFlashBegin" disabled>flash begin</button>
-            <button class="btn" id="btnFlashEnd" disabled>flash end</button>
+            <button class="btn needs-rw" id="btnFlashBegin" disabled>flash begin</button>
+            <button class="btn needs-rw" id="btnFlashEnd" disabled>flash end</button>
             <button class="btn ghost" id="btnFlashStatus" disabled>Status</button>
-            <button class="btn danger" id="btnFlashCancel" disabled>Cancel</button>
+            <button class="btn danger needs-rw" id="btnFlashCancel" disabled>Cancel</button>
           </div>
           <textarea class="srec" id="srecInput" placeholder="Paste S-record lines here (S1/S2/S3…)" disabled></textarea>
-          <button class="btn" id="btnFlashSend" disabled>Load S-records</button>
+          <button class="btn needs-rw" id="btnFlashSend" disabled>Load S-records</button>
         </div>
 
         <!-- CAN bus monitor (raw sniff, no ECU connection needed) -->
         <div class="pane" data-pane="sniff">
           <div class="pane-toolbar">
-            <button class="btn" id="btnSniffBack">← Back to diagnostics</button>
             <div class="sniff-rate-tabs">
               <button class="sftab active" data-rate="hs">HS (500k)</button>
               <button class="sftab" data-rate="ls">LS (125k)</button>
             </div>
+            <button class="btn" id="btnSniffStart">▶ Start</button>
+            <button class="btn ghost" id="btnSniffStop" disabled>■ Stop</button>
+            <label class="sniff-raw"><input type="checkbox" id="chkSniffRaw" checked> Raw frames</label>
+            <button class="btn ghost" id="btnSniffSave" title="Download the captured frames as a text file">⭳ Save capture</button>
             <button class="btn ghost" id="btnSniffClear">Clear feed</button>
-            <span class="hint">Set bus speed, then physically connect the MCP2515 to the corresponding CAN bus.</span>
+            <span class="hint">Physically connect the MCP2515 to the bus matching the selected speed. Press <strong>Sniffer</strong> again to go back.</span>
           </div>
           <div class="sniff-feed" id="sniffFeed">
-            <p class="muted">Raw CAN frames will appear below in the console. Select HS or LS for baud rate, then turn on <strong>sniff on</strong> from the console.</p>
+            <p class="muted">Pick a bus speed and press Start. <strong>Raw frames</strong> shows every identifier (sampled); unchecked shows only the ~50 identifiers the firmware decodes.</p>
+          </div>
+        </div>
+
+        <!-- Console command reference. Everything the buttons do can also be
+             typed in the console drawer; this is the list of what to type. -->
+        <div class="pane" data-pane="help">
+          <div class="pane-toolbar">
+            <input class="sel cfg-search" id="helpSearch" placeholder="Filter commands…">
+            <span class="hint">Type any of these in the console at the bottom. <code>help</code> prints the same list from the device. Press <strong>Help</strong> again to go back.</span>
+          </div>
+
+          <div class="help-body" id="helpBody">
+
+            <h3>1 · Session</h3>
+            <table class="help-tbl">
+              <tr><td><code>list</code></td><td>List the 23 known ECUs with their CAN addresses.</td></tr>
+              <tr><td><code>connect &lt;ECU&gt;</code></td><td>Open a diagnostic session. Takes the family name, not a label — <code>connect BMF</code> (BSI), <code>connect INJ</code> (engine), <code>connect ABRASR</code> (ABS/ESP).</td></tr>
+              <tr><td><code>exit</code></td><td>Close the session. Also <code>disconnect</code>.</td></tr>
+              <tr><td><code>status</code></td><td>Show what is connected, unlocked and whether write mode is on.</td></tr>
+              <tr><td><code>ident</code></td><td>Read the ECU identification block (VIN, part number, supplier, software version).</td></tr>
+              <tr><td><code>scan</code></td><td>Global Test: try every ECU in turn and report which answer and which have faults.</td></tr>
+              <tr><td><code>pdi</code></td><td>Pre-Delivery Inspection — a full scan plus a printed report.</td></tr>
+            </table>
+
+            <h3>2 · Write protection and security</h3>
+            <table class="help-tbl">
+              <tr><td><code>rw on</code> / <code>rw off</code></td><td>Leave or re-enter read-only mode. The firmware — not the UI — blocks <code>write</code>, <code>clear</code>, <code>trace</code>, <code>actuator</code>, <code>flash</code>, <code>service</code>, <code>program</code>, <code>esp</code> and <code>raw</code> until this is on.</td></tr>
+              <tr><td><code>pin &lt;hex&gt;</code></td><td>Set the 16-bit SecurityAccess PIN for the connected ECU, e.g. <code>pin B2B2</code>. Needed when the built-in family default is wrong or unknown — look yours up in <code>docs/ECU_KEYS.md</code>.</td></tr>
+              <tr><td><code>unlock</code></td><td>Run seed/key against the ECU. Required before any configuration write.</td></tr>
+            </table>
+
+            <h3>3 · Faults</h3>
+            <table class="help-tbl">
+              <tr><td><code>dtc</code></td><td>Read stored fault codes and decode them to P/C/B/U text.</td></tr>
+              <tr><td><code>clear</code></td><td>Clear stored faults on the connected ECU. Needs <code>rw on</code>.</td></tr>
+            </table>
+
+            <h3>4 · Reading and writing data</h3>
+            <table class="help-tbl">
+              <tr><td><code>read &lt;zone&gt;</code></td><td>Read one zone/identifier as raw hex. Bare hex, no <code>0x</code>: <code>read F190</code>. Values above FF are sent as UDS <code>22 xxxx</code>, below as KWP <code>21 xx</code>.</td></tr>
+              <tr><td><code>write &lt;zone&gt; &lt;hex…&gt;</code></td><td>Write a zone, e.g. <code>write F190 12 34</code>. Needs <code>unlock</code> and <code>rw on</code>. Prefer the Telecoding tab — it does read-modify-write on single bits instead of overwriting the whole zone.</td></tr>
+              <tr><td><code>config list</code></td><td>List every known BSI configuration parameter.</td></tr>
+              <tr><td><code>config read &lt;zone&gt;</code></td><td>Read one configuration zone and decode its parameters.</td></tr>
+              <tr><td><code>config readall</code></td><td>Read every configuration zone in sequence.</td></tr>
+              <tr><td><code>trace</code></td><td>Write traceability data (UDS 2901 / KWP A0). Needs <code>rw on</code>.</td></tr>
+            </table>
+
+            <h3>5 · Live measurements</h3>
+            <table class="help-tbl">
+              <tr><td><code>meas &lt;id&gt;</code></td><td>Add a parameter to the live poll, e.g. <code>meas 100A</code>. Several can run at once.</td></tr>
+              <tr><td><code>meas off</code></td><td>Stop all measurement polling.</td></tr>
+              <tr><td><code>live &lt;id&gt;</code> / <code>live off</code></td><td>Same idea for a single parameter.</td></tr>
+              <tr><td><code>obd &lt;pid&gt;</code> / <code>obd off</code></td><td>Standard OBD-II Mode 01, no session needed: <code>obd 0C</code> = RPM, <code>obd 0D</code> = speed, <code>obd 05</code> = coolant. These are generic and verified, unlike most PSA identifiers.</td></tr>
+            </table>
+
+            <h3>6 · Discovery — finding unknown identifiers</h3>
+            <p class="help-note">PSA never published the measurement identifiers Lexia 3 uses, so they have to be found on the car. These commands are how.</p>
+            <table class="help-tbl">
+              <tr><td><code>lidscan</code></td><td>Ask the connected ECU for every identifier from 00 to FF and report which answer. Read-only, works without <code>rw on</code>.</td></tr>
+              <tr><td><code>lidscan &lt;a&gt; &lt;b&gt;</code></td><td>Sweep a specific range, e.g. <code>lidscan 0100 01FF</code> for UDS DIDs.</td></tr>
+              <tr><td><code>lidscan stop</code></td><td>Abort a running sweep.</td></tr>
+              <tr><td colspan="2" class="help-tip">Identifiers reported as <em>present, refused</em> exist but need <code>unlock</code> first — run the sweep again after unlocking.</td></tr>
+              <tr><td><code>sniff raw</code></td><td>Raw CAN monitor: print every frame as hex, sampled to a few lines per second so the link is not flooded.</td></tr>
+              <tr><td><code>sniff on</code> / <code>sniff off</code></td><td>Decoded-only monitor (about 50 known identifiers) / stop monitoring.</td></tr>
+              <tr><td><code>gsniff rate hs</code> / <code>ls</code></td><td>Switch the MCP2515 between 500k (HS) and 125k (LS) and put it in listen-only mode. The Sniffer tab buttons do this for you.</td></tr>
+              <tr><td><code>gsniff watch hs &lt;id&gt;</code></td><td>Follow one identifier continuously, unsampled — e.g. <code>gsniff watch ls 1D0</code> for the climate frame.</td></tr>
+              <tr><td><code>gsniff</code></td><td>Print the rest of the guided-sniffer subcommands (baseline, count/hold/sweep capture, report, save/load).</td></tr>
+              <tr><td><code>raw &lt;hex…&gt;</code></td><td>Send a hand-built PDU, e.g. <code>raw 21 80</code>. Needs <code>rw on</code>, since it can encode any service including writes.</td></tr>
+            </table>
+
+            <h3>7 · Actuators and procedures</h3>
+            <p class="help-note warn">The routine identifiers behind these are <strong>not verified against a source</strong>. On the wrong ECU an unknown routine can act on real hardware. Treat everything in this section as experimental.</p>
+            <table class="help-tbl">
+              <tr><td><code>actuator &lt;id&gt; [args]</code></td><td>Start an actuator routine on the connected ECU, e.g. <code>actuator 3101</code>.</td></tr>
+              <tr><td><code>service reset</code></td><td>Reset the maintenance indicator (BSI).</td></tr>
+              <tr><td><code>service schedule &lt;km&gt; &lt;months&gt;</code></td><td>Set the maintenance interval.</td></tr>
+              <tr><td><code>esp calib</code></td><td>Steering angle sensor calibration. Vehicle level, wheels straight.</td></tr>
+              <tr><td><code>esp bleed</code></td><td>ABS hydraulic bleeding. Keep the reservoir full throughout.</td></tr>
+              <tr><td><code>program key</code></td><td>Enter key learning mode.</td></tr>
+              <tr><td><code>program init</code></td><td><strong>Dangerous.</strong> BSI factory initialisation — resets configuration, keys and radio code.</td></tr>
+            </table>
+
+            <h3>8 · Firmware download</h3>
+            <table class="help-tbl">
+              <tr><td><code>flash &lt;S-record&gt;</code></td><td>Stage one S1/S2/S3 line. Stage the whole image <em>before</em> <code>flash begin</code>.</td></tr>
+              <tr><td><code>flash begin</code></td><td>Open the programming session, erase, and start the transfer.</td></tr>
+              <tr><td><code>flash end</code></td><td>Finish: transfer exit plus checksum verification.</td></tr>
+              <tr><td><code>flash status</code> / <code>flash cancel</code></td><td>Show the state machine step / abort and drop the staged records.</td></tr>
+            </table>
+
+            <h3>9 · Hardware</h3>
+            <table class="help-tbl">
+              <tr><td><code>hwtest</code></td><td>Self-test: SPI register readback plus a CAN loopback on the MCP2515. Run this first if nothing responds.</td></tr>
+              <tr><td><code>help</code></td><td>Print the device's own command list into the console.</td></tr>
+            </table>
+
+            <h3>Typical order of work</h3>
+            <ol class="help-steps">
+              <li><code>hwtest</code> — confirm the CAN controller is wired and alive.</li>
+              <li><code>scan</code> — see which ECUs answer.</li>
+              <li><code>connect BMF</code> → <code>dtc</code> — read faults.</li>
+              <li><code>unlock</code> (with <code>pin</code> if the default fails) before anything that writes.</li>
+              <li><code>rw on</code> — only once you intend to change something.</li>
+              <li><code>lidscan</code> — to discover parameters that are not in the database yet.</li>
+            </ol>
           </div>
         </div>
       </section>
@@ -183,6 +318,8 @@
       <span>Console</span>
       <div class="console-tools">
         <label class="chk"><input type="checkbox" id="chkAutoscroll" checked> auto-scroll</label>
+        <span class="mini-note" id="logCount">0 lines</span>
+        <button class="mini" id="btnSaveLog" title="Download the whole session log as a text file">Save log</button>
         <button class="mini" id="btnClearLog">Clear</button>
         <button class="mini" id="btnConsoleToggle">▾</button>
       </div>

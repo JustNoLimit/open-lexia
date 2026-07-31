@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <unistd.h>
 #include "psa/psa_protocol.hpp"
 #include "psa/isotp.hpp"
 #include "psa/can_manager.hpp"
@@ -28,6 +30,7 @@
 #include "psa/dtc_text.hpp"
 #include "psa/flash_engine.hpp"
 #include "psa/can_sniffer.hpp"
+#include "psa/ecu_params.hpp"
 #include <vector>
 
 // The shell's host-test clock. Tests advance it to exercise the flow-control
@@ -53,6 +56,7 @@ static void test_diag_shell_state() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     assert(shell.state() == psa::DiagShell::State::Idle);
     assert(!shell.isConnected());
@@ -158,6 +162,7 @@ static void test_diag_shell_unlock_flow() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     // 1. Connect to BMF (BSI)
     psa::g_sent_frames.clear();
@@ -278,6 +283,7 @@ static void test_diag_shell_unlock_uds_flow() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     // 1. Connect to TELEMAT
     psa::g_sent_frames.clear();
@@ -442,6 +448,7 @@ static void test_diag_shell_live_data_and_actuator() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     // Connect to BMF (KWP)
     shell.feedCommandLine("connect BMF");
@@ -576,10 +583,86 @@ static void test_flash_engine_uds() {
     printf("  flash_engine: UDS flashing steps state machine OK\n");
 }
 
+// The LID sweep has to keep walking the range on every possible ECU reaction:
+// a positive read, a "does not exist" rejection, a "exists but locked"
+// rejection, and total silence. If any one of those stalls it, the sweep hangs
+// on the first identifier and the tool is useless.
+static void test_lidscan_sweep() {
+    psa::CanManager can;
+    psa::DiagShell shell;
+    shell.init(&can);
+
+    shell.feedCommandLine("connect BMF");
+    psa::CanFrame resp;
+    resp.id = 0x652;
+    resp.dlc = 8;
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 1;
+    resp.data[1] = 0xC1;   // session open
+    shell.feedDiagFrame(resp);
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // lidscan must not need 'rw on': it only ever reads.
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("lidscan 01 04");
+    assert(shell.state() == psa::DiagShell::State::WaitingResponse);
+    assert(!psa::g_sent_frames.empty());
+    assert(psa::g_sent_frames.back().data[1] == 0x21);  // KWP ReadDataByLocalId
+    assert(psa::g_sent_frames.back().data[2] == 0x01);
+
+    // 0x01 answers with data -> next identifier goes out.
+    psa::g_sent_frames.clear();
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 4;
+    resp.data[1] = 0x61;   // KWP PosRead
+    resp.data[2] = 0x01;
+    resp.data[3] = 0xAA;
+    resp.data[4] = 0xBB;
+    shell.feedDiagFrame(resp);
+    assert(psa::g_sent_frames.back().data[2] == 0x02);
+
+    // 0x02 is rejected as out of range -> still advances.
+    psa::g_sent_frames.clear();
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 3;
+    resp.data[1] = 0x7F;
+    resp.data[2] = 0x21;
+    resp.data[3] = 0x31;   // requestOutOfRange
+    shell.feedDiagFrame(resp);
+    assert(psa::g_sent_frames.back().data[2] == 0x03);
+
+    // 0x03 stays silent: the short sweep deadline has to move it along, and it
+    // must not be mistaken for the 5 s session-level timeout that tears down.
+    psa::g_sent_frames.clear();
+    g_fake_time_us += 400'000;
+    shell.poll();
+    assert(shell.state() == psa::DiagShell::State::WaitingResponse);
+    assert(!psa::g_sent_frames.empty());
+    assert(psa::g_sent_frames.back().data[2] == 0x04);
+
+    // 0x04 is the last one; a security refusal ends the sweep cleanly.
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 3;
+    resp.data[1] = 0x7F;
+    resp.data[2] = 0x21;
+    resp.data[3] = 0x33;   // securityAccessDenied — identifier exists
+    shell.feedDiagFrame(resp);
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // Sweep is over: nothing further goes on the bus without a new command.
+    psa::g_sent_frames.clear();
+    g_fake_time_us += 400'000;
+    shell.poll();
+    assert(psa::g_sent_frames.empty());
+
+    printf("  lidscan sweep: OK\n");
+}
+
 static void test_multi_param_live_polling() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     // Connect to BMF (KWP)
     shell.feedCommandLine("connect BMF");
@@ -669,6 +752,7 @@ static void test_pin_override_flow() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     // CLIM has no source-verified family PIN (getEcuPin -> 0), so unlock must NOT
     // send a key frame; it should ask for a manual PIN instead.
@@ -719,6 +803,7 @@ static void test_shell_reports_transmit_failure() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     psa::g_sent_frames.clear();
     psa::g_send_result = psa::McpError::Ok;
@@ -1034,6 +1119,7 @@ static void test_flash_shell_begin() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
 
     // Connect to BMF and unlock
     psa::g_sent_frames.clear();
@@ -1091,6 +1177,7 @@ static void test_flash_shell_srecord_staging() {
     psa::CanManager can;
     psa::DiagShell shell;
     shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
     shell.feedCommandLine("connect BMF");
     psa::CanFrame resp;
     resp.id = 0x652;
@@ -1246,6 +1333,194 @@ static void test_obd_mode01() {
     printf("  obd_mode01: J1979 PID decoders OK\n");
 }
 
+// A KWP ECU answering a UDS-framed zone read. readZone() promotes any zone id
+// above 0xFF to "22 hi lo" regardless of protocol, so RD4 (AUTORADIO, KWP/HAB)
+// replies "62 2A 00 ...". The decoder used to take the zone id from pdu[1] --
+// 0x2A instead of 0x2A00 -- and read the payload one byte early, which silently
+// mis-decoded every radio config field including the AUX inputs.
+static std::string captureStdout(void (*body)(psa::DiagShell&), psa::DiagShell& sh) {
+    char path[] = "/tmp/psa_zone_capXXXXXX";
+    int tmp = mkstemp(path);
+    fflush(stdout);
+    int saved = dup(fileno(stdout));
+    dup2(tmp, fileno(stdout));
+    body(sh);
+    fflush(stdout);
+    dup2(saved, fileno(stdout));
+    close(saved);
+    lseek(tmp, 0, SEEK_SET);
+    std::string out;
+    char buf[512];
+    ssize_t n;
+    while ((n = read(tmp, buf, sizeof buf)) > 0) out.append(buf, static_cast<size_t>(n));
+    close(tmp);
+    unlink(path);
+    return out;
+}
+
+static void test_uds_framed_zone_on_kwp_ecu() {
+    psa::CanManager can;
+    psa::DiagShell shell;
+    shell.init(&can);
+    shell.feedCommandLine("rw on");   // writes are blocked in the default read-only mode
+
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("connect AUTORADIO");
+    psa::CanFrame resp;
+    resp.id = 0x660;                 // AUTORADIO recv_id
+    resp.dlc = 8;
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 1;
+    resp.data[1] = 0xC1;             // positive response to KWP startSession
+    assert(shell.feedDiagFrame(resp));
+    assert(shell.state() == psa::DiagShell::State::Connected);
+
+    // The request must go out UDS-framed even though the ECU is KWP.
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("read 2A00");
+    assert(!psa::g_sent_frames.empty());
+    const psa::CanFrame& req = psa::g_sent_frames.back();
+    assert(req.data[1] == 0x22 && req.data[2] == 0x2A && req.data[3] == 0x00);
+
+    // 62 2A 00 | 00 00 00 12 -> byte 3 = 0x12:
+    //   AUX n°1 = (0x12 & 0x06) >> 1 = 1 -> "Classic"
+    //   AUX n°2 = (0x12 & 0x18) >> 3 = 2 -> "USB"
+    std::string out = captureStdout([](psa::DiagShell& sh) {
+        psa::CanFrame r;
+        r.id = 0x660;
+        r.dlc = 8;
+        r.data[0] = 7;               // single frame, 7 payload bytes
+        r.data[1] = 0x62; r.data[2] = 0x2A; r.data[3] = 0x00;
+        r.data[4] = 0x00; r.data[5] = 0x00; r.data[6] = 0x00; r.data[7] = 0x12;
+        assert(sh.feedDiagFrame(r));
+    }, shell);
+
+    assert(out.find("Zone 2A00") != std::string::npos);
+    assert(out.find("Auxiliary input n°1: 1=Classic") != std::string::npos);
+    assert(out.find("Auxiliary input n°2: 2=USB") != std::string::npos);
+    // Byte 1 is all zeros, so the bit-fields living there must read as off --
+    // proof the payload was not slid one position left.
+    assert(out.find("CD player: OFF") != std::string::npos);
+    printf("  zone decode: UDS-framed 2A00 on a KWP ECU decodes AUX inputs OK\n");
+}
+
+// Table integrity for every ECU, not just the one being debugged. These are the
+// invariants the zone decoder relies on; a typo in any of the 25 catalogues in
+// ecu_params.hpp silently mis-decodes that ECU on the car, where it is far more
+// expensive to notice.
+static void test_ecu_param_tables() {
+    for (size_t i = 0; i < psa::kEcuParamSetCount; ++i) {
+        const psa::EcuParamSet& s = psa::kEcuParamSets[i];
+
+        for (size_t k = 0; k < s.config_count; ++k) {
+            const psa::BsiZoneParam& b = s.config_params[k];
+            // A zero mask would decode every field of the zone as 0.
+            assert(b.bit_mask != 0);
+            // ZT_BOOL prints ON/OFF, which is only meaningful for one bit.
+            if (b.type == psa::ZT_BOOL)
+                assert((b.bit_mask & (b.bit_mask - 1)) == 0);
+            // ZT_ENUM indexes its table by the decoded value, so slot i must be
+            // the entry for value i -- a gap silently shifts every later label.
+            if (b.type == psa::ZT_ENUM) {
+                assert(b.enum_values != nullptr);
+                for (int v = 0; b.enum_values[v]; ++v) {
+                    char want[16];
+                    snprintf(want, sizeof want, "%d=", v);
+                    assert(strncmp(b.enum_values[v], want, strlen(want)) == 0);
+                }
+            }
+            // Two entries on the same bits mean one of them is a copy-paste slip.
+            for (size_t j = k + 1; j < s.config_count; ++j) {
+                const psa::BsiZoneParam& o = s.config_params[j];
+                assert(!(o.zone_id == b.zone_id && o.byte_offset == b.byte_offset &&
+                         o.bit_mask == b.bit_mask));
+            }
+        }
+
+        for (size_t k = 0; k < s.meas_count; ++k) {
+            assert(s.meas_params[k].decode != nullptr);
+            for (size_t j = k + 1; j < s.meas_count; ++j)
+                assert(s.meas_params[j].id != s.meas_params[k].id);
+        }
+    }
+    printf("  ecu param tables: %zu ECU catalogues consistent\n", psa::kEcuParamSetCount);
+}
+
+// Live-data ids are not globally unique. 0x0021 is a tyre pressure on DSG and
+// the A/C pressure in the shared catalogue -- with different scalings -- so a
+// global-first lookup returns a wrong number under a wrong name rather than
+// failing visibly. The connected ECU's own table has to win.
+static void test_param_lookup_is_ecu_aware() {
+    const psa::LiveDataParam* dsg =
+        psa::findParamForEcu("DSG", psa::Protocol::KWP_IS, 0x0021);
+    assert(dsg && strcmp(dsg->name, "Pressure FL") == 0);
+
+    // An ECU with no table of its own still reaches the shared catalogue.
+    const psa::LiveDataParam* shared =
+        psa::findParamForEcu("BMF", psa::Protocol::KWP_IS, 0x0021);
+    assert(shared && strcmp(shared->name, "AC Pressure") == 0);
+
+    // Every per-ECU measurement must now be reachable from its own ECU; 135 of
+    // 149 used to resolve to nothing at all.
+    for (size_t i = 0; i < psa::kEcuParamSetCount; ++i) {
+        const psa::EcuParamSet& s = psa::kEcuParamSets[i];
+        for (size_t k = 0; k < s.meas_count; ++k) {
+            const psa::LiveDataParam* got =
+                psa::findParamForEcu(s.family, psa::Protocol::KWP_IS, s.meas_params[k].id);
+            assert(got == &s.meas_params[k]);
+        }
+    }
+    printf("  param lookup: per-ECU tables win over the shared catalogue\n");
+}
+
+// Write protection has to live at command dispatch, not in the dashboard: the
+// USB console and any other client reach the same entry point. `raw` counts as
+// a write because it can hand-encode any write service.
+static void test_read_only_mode_blocks_writes() {
+    psa::CanManager can;
+    psa::DiagShell shell;
+    shell.init(&can);
+    assert(!shell.rwEnabled());          // read-only until asked otherwise
+
+    shell.feedCommandLine("connect BMF");
+    psa::CanFrame resp;
+    resp.id = 0x652;
+    resp.dlc = 8;
+    std::memset(resp.data, 0, 8);
+    resp.data[0] = 1;
+    resp.data[1] = 0xC1;
+    assert(shell.feedDiagFrame(resp));
+
+    // `pdi` is absent on purpose: it only scans and reads DTCs.
+    const char* writes[] = { "write 2A00 01", "clear", "trace", "actuator 3101",
+                             "flash begin", "service reset", "program 01",
+                             "esp calib", "raw 2E 2A 00 01" };
+    for (const char* w : writes) {
+        psa::g_sent_frames.clear();
+        shell.feedCommandLine(w);
+        assert(psa::g_sent_frames.empty());   // nothing reached the bus
+    }
+
+    // Reads still work while protected.
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("read 2A00");
+    assert(!psa::g_sent_frames.empty());
+    resp.data[0] = 4;
+    resp.data[1] = 0x62; resp.data[2] = 0x2A; resp.data[3] = 0x00; resp.data[4] = 0x00;
+    assert(shell.feedDiagFrame(resp));   // clear WaitingResponse
+
+    // And the toggle actually lifts the guard.
+    shell.feedCommandLine("rw on");
+    assert(shell.rwEnabled());
+    psa::g_sent_frames.clear();
+    shell.feedCommandLine("write 2A00 01");
+    assert(!psa::g_sent_frames.empty());
+
+    shell.feedCommandLine("rw off");
+    assert(!shell.rwEnabled());
+    printf("  read-only mode: 9 write commands blocked, reads unaffected\n");
+}
+
 int main() {
     printf("psa self-check\n");
     test_dtc_text();
@@ -1263,6 +1538,7 @@ int main() {
     test_actuator_req_builders();
     test_diag_shell_live_data_and_actuator();
     test_multi_param_live_polling();
+    test_lidscan_sweep();
     test_srecord_parser();
     test_flash_checksum();
     test_flash_engine_uds();
@@ -1275,6 +1551,10 @@ int main() {
     test_flash_shell_srecord_staging();
     test_flash_srecord_bounds();
     test_pin_override_flow();
+    test_uds_framed_zone_on_kwp_ecu();
+    test_ecu_param_tables();
+    test_param_lookup_is_ecu_aware();
+    test_read_only_mode_blocks_writes();
     test_can_sniffer_count_mode();
     test_can_sniffer_hold_mode();
     test_can_sniffer_sweep_mode();

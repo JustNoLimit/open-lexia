@@ -7,6 +7,7 @@
 #include "psa/actuator_catalog.hpp"
 #include "psa/flash_engine.hpp"
 #include "psa/ecu_zones.hpp"
+#include "psa/ecu_params.hpp"
 #include <cstdio>
 #include <cstring>
 #include <cctype>
@@ -86,6 +87,16 @@ bool DiagShell::poll() {
         }
     }
 
+    // LID sweep runs on its own short deadline (see kLidScanTimeoutUs). Only
+    // when nothing at all has come back: a multi-frame reply that is still being
+    // reassembled must be allowed to finish, however slowly.
+    if (lidscan_active_ && state_ == State::WaitingResponse && !tp_.rxActive() &&
+        get_time_us() - lidscan_sent_us_ > kLidScanTimeoutUs) {
+        tp_.reset();
+        state_ = State::Connected;
+        lidScanAdvance();
+    }
+
     // Check for response timeout
     if (state_ == State::WaitingResponse) {
         uint64_t now = get_time_us();
@@ -110,6 +121,10 @@ bool DiagShell::poll() {
             if (live_polling_active_) {
                 live_polling_active_ = false;
                 printf("[LIVE] Stopped (no response).\n");
+            }
+            if (lidscan_active_) {
+                lidscan_active_ = false;
+                printf("[LIDSCAN] Aborted at %04X.\n", lidscan_id_);
             }
             if (scan_active_ && ecu_) {
                 scan_results_[scan_index_].scanned = true;
@@ -287,8 +302,27 @@ void DiagShell::processLine() {
     if (*arg) { *arg = '\0'; arg++; }
     while (*arg && isspace(static_cast<unsigned char>(*arg))) arg++;
 
+    // Write protection, enforced here rather than in the dashboard: the USB
+    // serial console and any other client reach the same dispatch, so a UI
+    // button alone would guard nothing. `raw` is on the list because it can
+    // encode any write service by hand.
+    if (!rw_enabled_) {
+        static const char* const kWriteCommands[] = {
+            "write", "trace", "clear", "actuator", "flash",
+            "service", "program", "esp", "raw",
+        };
+        for (const char* w : kWriteCommands) {
+            if (strcmp(cmd, w) == 0) {
+                printf("[DIAG] Read-only mode: '%s' blocked. Enable R/W first ('rw on').\n", cmd);
+                return;
+            }
+        }
+    }
+
     // Dispatch
-    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
+    if (strcmp(cmd, "rw") == 0) {
+        cmdRw(arg);
+    } else if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
         cmdHelp();
     } else if (strcmp(cmd, "list") == 0) {
         cmdList();
@@ -344,6 +378,8 @@ void DiagShell::processLine() {
         cmdHwtest();
     } else if (strcmp(cmd, "gsniff") == 0) {
         cmdGuidedSniff(arg);
+    } else if (strcmp(cmd, "lidscan") == 0) {
+        cmdLidScan(arg);
     } else {
         printf("[DIAG] Unknown command: '%s'. Type 'help'.\n", cmd);
     }
@@ -364,6 +400,7 @@ void DiagShell::cmdHelp() {
         "  dtc                   Read fault codes\n"
         "  clear                 Clear fault codes\n"
         "  read <zone_hex>       Read zone (e.g. read F190)\n"
+        "  lidscan [a b|stop]    Sweep identifiers to find readable ones (default 00..FF)\n"
         "  live [param|off]      Monitor sensor parameter (e.g. live 100A or live off)\n"
         "  actuator <id> [args]  Start actuator routine (e.g. actuator 3101)\n"
         "  flash begin           Start flash sequence (erase + prepare)\n"
@@ -372,7 +409,7 @@ void DiagShell::cmdHelp() {
         "  flash status          Show current flash state machine step\n"
         "  flash cancel          Abort flash sequence\n"
         "  raw <hex bytes>       Send raw PDU (e.g. raw 21 80)\n"
-        "  sniff [on|off]        Toggle passive decoding (gsniff rate hs/ls to change bus)\n"
+        "  sniff [on|raw|off]    Passive bus monitor; 'raw' dumps every frame (gsniff rate hs/ls)\n"
         "  scan                  Global ECU test (scan all ECUs)\n"
         "  pdi                   Pre-Delivery Inspection (full report)\n"
         "  config list           List all BSI configuration parameters\n"
@@ -389,6 +426,7 @@ void DiagShell::cmdHelp() {
         "  program init          BSI factory initialisation (DANGEROUS)\n"
         "  esp calib             ESP steering angle calibration\n"
         "  esp bleed             ABS hydraulic bleeding procedure\n"
+        "  rw [on|off]           Read-only (default) or read/write mode\n"
         "  hwtest                Hardware self-test (SPI + CAN loopback)\n"
         "  gsniff <sub>          Guided CAN signal discovery (gsniff for subcommands)\n"
         "  help                  This message\n"
@@ -442,6 +480,7 @@ void DiagShell::cmdConnect(const char* arg) {
 
     ecu_ = found;
     active_bus_ = busForEcu(ecu_);
+    setBusMode(CanBitrate::Bps500k, /*listen_only=*/false);
     tp_.reset();
     unlocked_ = false;
     manual_pin_valid_ = false;
@@ -490,6 +529,84 @@ void DiagShell::cmdDisconnect() {
     live_param_count_ = 0;
     live_param_idx_ = 0;
     config_readall_active_ = false;
+    lidscan_active_ = false;
+}
+
+// =============================================================================
+// LID / DID sweep — discovery tool for the parameter tables we do not have.
+// PSA never published the measurement identifiers Lexia 3 reads, so the only
+// way to find them is to ask the ECU for every identifier in turn and note
+// which ones answer. Strictly read-only: it sends nothing but ReadDataByLocalId
+// (KWP 21 xx) / ReadDataByIdentifier (UDS 22 xxxx), never a write or a routine.
+// =============================================================================
+
+void DiagShell::cmdLidScan(const char* arg) {
+    if (strcmp(arg, "stop") == 0) {
+        if (!lidscan_active_) { printf("[LIDSCAN] Not running.\n"); return; }
+        lidscan_active_ = false;
+        state_ = State::Connected;
+        printf("[LIDSCAN] Stopped at %04X. %u of %u answered.\n",
+               lidscan_id_, lidscan_hits_,
+               static_cast<unsigned>(lidscan_id_ - lidscan_first_ + 1));
+        return;
+    }
+    if (!isConnected() || !ecu_) { printf("[LIDSCAN] Not connected. Use 'connect <ECU>' first.\n"); return; }
+    if (lidscan_active_)          { printf("[LIDSCAN] Already running ('lidscan stop' to abort).\n"); return; }
+    if (state_ == State::WaitingResponse) { printf("[LIDSCAN] Busy.\n"); return; }
+
+    uint16_t first = 0x00, last = 0xFF;
+    if (*arg) {
+        const char* sep = arg;
+        while (*sep && !isspace(static_cast<unsigned char>(*sep))) sep++;
+        const char* second = sep;
+        while (*second && isspace(static_cast<unsigned char>(*second))) second++;
+        if (!*second || !parseHexU16(arg, sep, &first) ||
+            !parseHexU16(second, nullptr, &last)) {
+            printf("[LIDSCAN] Usage: lidscan [start_hex end_hex] | lidscan stop\n"
+                   "          lidscan            sweep 00..FF (KWP local IDs)\n"
+                   "          lidscan 0100 01FF  sweep a UDS DID range\n");
+            return;
+        }
+        if (last < first) { printf("[LIDSCAN] End is below start.\n"); return; }
+    }
+
+    // readZone() promotes any identifier above 0xFF to UDS framing, so a range
+    // of 00..FF is a KWP local-ID sweep and anything wider is a DID sweep. Both
+    // are legitimate on a CAN2004 ECU; which one the user wants is the range.
+    lidscan_first_ = first;
+    lidscan_id_    = first;
+    lidscan_end_   = last;
+    lidscan_hits_  = 0;
+    lidscan_active_ = true;
+    printf("[LIDSCAN] Sweeping %04X..%04X on %s (%u identifiers, ~%u s worst case).\n",
+           first, last, ecu_->family,
+           static_cast<unsigned>(last - first + 1),
+           static_cast<unsigned>((last - first + 1) * kLidScanTimeoutUs / 1'000'000));
+    lidScanSend();
+}
+
+void DiagShell::lidScanSend() {
+    pending_count_ = 0;   // the 0x78 streak is per identifier, not per sweep
+    Req req = readZone(ecu_->proto, lidscan_id_);
+    sendReq(req);
+    state_ = State::WaitingResponse;
+    response_start_us_ = get_time_us();
+    lidscan_sent_us_   = response_start_us_;
+}
+
+void DiagShell::lidScanAdvance() {
+    if (!lidscan_active_) return;
+    if (lidscan_id_ >= lidscan_end_) {   // compare before incrementing: end may be FFFF
+        lidscan_active_ = false;
+        state_ = State::Connected;
+        printf("[LIDSCAN] Done. %u of %u identifiers answered.\n",
+               lidscan_hits_, static_cast<unsigned>(lidscan_end_ - lidscan_first_ + 1));
+        return;
+    }
+    lidscan_id_++;
+    // Progress ticks so a long sweep does not look like a hang on a quiet ECU.
+    if ((lidscan_id_ & 0x1F) == 0) printf("[LIDSCAN] ...%04X\n", lidscan_id_);
+    lidScanSend();
 }
 
 void DiagShell::cmdPin(const char* arg) {
@@ -806,12 +923,21 @@ void DiagShell::cmdRaw(const char* arg) {
 void DiagShell::cmdSniff(const char* arg) {
     if (strcmp(arg, "off") == 0) {
         sniff_enabled_ = false;
+        sniff_raw_ = false;
         printf("[DIAG] Passive sniffing OFF.\n");
+    } else if (strcmp(arg, "raw") == 0) {
+        // The decoder only knows ~50 IDs and prints nothing for the rest, so on
+        // a bus carrying anything else it looked broken. Raw mode prints every
+        // frame (rate-limited in main.cpp) — this is the actual bus monitor.
+        sniff_enabled_ = true;
+        sniff_raw_ = true;
+        printf("[DIAG] Passive sniffing ON (raw frames, sampled).\n");
     } else if (strcmp(arg, "on") == 0 || *arg == '\0') {
         sniff_enabled_ = true;
-        printf("[DIAG] Passive sniffing ON.\n");
+        sniff_raw_ = false;
+        printf("[DIAG] Passive sniffing ON (decoded IDs only).\n");
     } else {
-        printf("[DIAG] Usage: sniff [on|off]\n");
+        printf("[DIAG] Usage: sniff [on|raw|off]\n");
     }
 }
 
@@ -883,11 +1009,11 @@ void DiagShell::cmdGuidedSniff(const char* arg) {
     } else if (strcmp(sub, "rate") == 0) {
         if (strcmp(subarg, "hs") == 0 || strcmp(subarg, "HS") == 0) {
             sniff_bus_ = Bus::HighSpeed;
-            if (can_) can_->reconfigureBus(Bus::HighSpeed, CanBitrate::Bps500k);
+            setBusMode(CanBitrate::Bps500k, /*listen_only=*/true);
             printf("[GSNIFF] Switched to HS (500k). Connect MCP2515 to OBD pins 3/8.\n");
         } else if (strcmp(subarg, "ls") == 0 || strcmp(subarg, "LS") == 0) {
             sniff_bus_ = Bus::LowSpeed;
-            if (can_) can_->reconfigureBus(Bus::LowSpeed, CanBitrate::Bps125k);
+            setBusMode(CanBitrate::Bps125k, /*listen_only=*/true);
             printf("[GSNIFF] Switched to LS (125k). Connect MCP2515 to BSI CAN lines.\n");
         } else {
             printf("[GSNIFF] Usage: gsniff rate <hs|ls>\n");
@@ -913,6 +1039,24 @@ void DiagShell::cmdGuidedSniff(const char* arg) {
 
 // --- Internal helpers --------------------------------------------------------
 
+// One MCP2515, one wire. The BSI gateways the body-bus ECUs onto CAN-HS, so
+// every diagnostic exchange -- including the ECUs the table lists as LS -- runs
+// at 500k in normal mode. Only the sniffer ever drops to 125k, and it must be
+// put back before the next request: at the wrong rate nothing acknowledges us,
+// and in listen-only TXREQ is never serviced at all, so the three TX buffers
+// latch full and every send afterwards dies with "bus busy".
+void DiagShell::setBusMode(CanBitrate rate, bool listen_only) {
+    if (!can_) return;
+    can_->reconfigureBus(Bus::HighSpeed, rate);
+#ifndef HOST_TEST
+    if (Mcp2515* m = can_->bus(Bus::HighSpeed)) {
+        if (listen_only) m->setListenOnlyMode(); else m->setNormalMode();
+    }
+#else
+    (void)listen_only;
+#endif
+}
+
 void DiagShell::sendReq(const Req& req) {
     sendPdu(req.buf, req.len);
 }
@@ -929,6 +1073,12 @@ bool DiagShell::sendFrame(const CanFrame& f) {
         sleep_us(200);
 #endif
     }
+    // Retries exhausted: all three buffers are latched with nothing draining
+    // them. Drop them, or every later request inherits a dead transmitter --
+    // which is why one stuck ECU used to poison the whole rest of a scan.
+#ifndef HOST_TEST
+    if (Mcp2515* m = can_->bus(active_bus_)) m->recoverBus();
+#endif
     return false;
 }
 
@@ -1005,6 +1155,21 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
             state_ = State::WaitingResponse;    // stay waiting
             return;
         }
+        if (lidscan_active_) {
+            // Most identifiers come back "request out of range" (0x31) or
+            // "service not supported" (0x11) — that is the ECU saying the
+            // identifier does not exist, and printing 250 of those buries the
+            // hits. A refusal on security or session grounds is the opposite:
+            // the identifier IS implemented, we are just not allowed to read it
+            // yet, which is exactly what the sweep is looking for.
+            uint8_t nrc = (len >= 3) ? pdu[2] : 0x00;
+            if (nrc == 0x22 || nrc == 0x33 || nrc == 0x7E || nrc == 0x7F) {
+                lidscan_hits_++;
+                printf("[LIDSCAN] %04X: present, refused (NRC %02X)\n", lidscan_id_, nrc);
+            }
+            lidScanAdvance();
+            return;
+        }
         printNegResponse(pdu, len);
         if (proc_ != Procedure::None) {
             abortProcedure("ECU rejected a procedure step");
@@ -1030,6 +1195,20 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
             state_ = State::Idle;
             ecu_ = nullptr;
             advanceScan();
+        } else if (!config_readall_active_) {
+            // Plain manual command (connect/dtc/read/...): the ISO-TP dispatcher
+            // already forced state_ = Connected the moment this PDU completed
+            // reassembly, before it knew the response was negative. If the
+            // rejected service was the session-open request itself, there never
+            // was a session — leaving state_ = Connected here made 'isConnected()'
+            // true for a session BSI had just refused, so the periodic keep-alive
+            // kept firing 0x3E into it and getting the same NRC back forever.
+            uint8_t session_open_service =
+                (ecu_->proto == Protocol::KWP_IS) ? kwp::StartSession_IS
+                                                   : kwp::StartDiagnosticSession; // == uds::DiagnosticSessionControl
+            if (len >= 2 && pdu[1] == session_open_service) {
+                state_ = State::Idle;
+            }
         }
         return;
     }
@@ -1212,19 +1391,17 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
 
     // Live polling response decoding
     if (live_polling_active_) {
-        bool is_uds = (p == Protocol::UDS);
+        // Framing comes from the reply's service byte, not the ECU's nominal
+        // protocol: readLiveData() promotes any id above 0xFF to UDS framing
+        // even on a KWP ECU, and that ECU then answers 0x62.
         uint16_t resp_param_id = 0;
         size_t header_len = 0;
-        if (is_uds && service == uds::PosRead) {
-            if (len >= 3) {
-                resp_param_id = (pdu[1] << 8) | pdu[2];
-                header_len = 3;
-            }
-        } else if (!is_uds && service == kwp::PosRead) {
-            if (len >= 2) {
-                resp_param_id = pdu[1];
-                header_len = 2;
-            }
+        if (service == uds::PosRead && len >= 3) {
+            resp_param_id = (pdu[1] << 8) | pdu[2];
+            header_len = 3;
+        } else if (service == kwp::PosRead && len >= 2) {
+            resp_param_id = pdu[1];
+            header_len = 2;
         }
 
         if (header_len > 0) {
@@ -1233,8 +1410,8 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
                 if (live_param_ids_[i] == resp_param_id) { in_list = true; break; }
             }
             if (in_list) {
-                const LiveDataParam* param = findParam(p, resp_param_id);
-                if (!param) param = findParamInCategories(resp_param_id);
+                const LiveDataParam* param =
+                    findParamForEcu(ecu_->family, p, resp_param_id);
                 if (param && param->decode) {
                     float val = param->decode(pdu + header_len, len - header_len);
                     printf("[LIVE] %s: %.1f %s\n", param->name, val, param->unit);
@@ -1248,137 +1425,44 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
         }
     }
 
-    // Zone read positive response
-    if (p == Protocol::UDS && service == uds::PosRead) {
-        if (config_readall_active_) {
-            uint16_t zid = (pdu[1] << 8) | pdu[2];
-            printf("[CONFIG] Zone %04X:\n", zid);
-            const uint8_t* data = pdu + 3;
-            size_t data_len = len - 3;
-            const BsiZoneParam* zp = findZoneParam(zid);
-            if (zp) {
-                for (size_t c = 0; c < kZoneCategoryCount; ++c) {
-                    for (size_t p2 = 0; p2 < kZoneCategories[c].count; ++p2) {
-                        if (kZoneCategories[c].params[p2].zone_id == zid) {
-                            const BsiZoneParam& bp = kZoneCategories[c].params[p2];
-                            uint8_t byte_val = (bp.byte_offset < data_len) ? data[bp.byte_offset] : 0;
-                            uint8_t masked = (bp.bit_mask == 0xFF) ? byte_val : (byte_val & bp.bit_mask);
-                            if (bp.bit_mask != 0xFF && bp.bit_mask != 0) {
-                                uint8_t shift = 0;
-                                uint8_t m = bp.bit_mask;
-                                while ((m & 1) == 0) { m >>= 1; shift++; }
-                                masked >>= shift;
-                            }
-                            printf("    %s: ", bp.name);
-                            if (bp.type == ZT_BOOL) {
-                                printf("%s\n", masked ? "ON" : "OFF");
-                            } else if (bp.type == ZT_ENUM && bp.enum_values) {
-                                const char* val_str = nullptr;
-                                for (int vi = 0; bp.enum_values[vi]; ++vi) {
-                                    char buf[16];
-                                    snprintf(buf, sizeof(buf), "%d=", vi);
-                                    if (strncmp(bp.enum_values[vi], buf, strlen(buf)) == 0) {
-                                        if (masked == vi) { val_str = bp.enum_values[vi]; break; }
-                                    }
-                                }
-                                if (masked < 16 && !val_str) val_str = bp.enum_values[masked];
-                                printf("%s\n", val_str ? val_str : "?");
-                            } else {
-                                printf("%u (0x%02X)\n", masked, masked);
-                            }
-                        }
-                    }
-                }
-            } else {
-                for (size_t i = 0; i < data_len; ++i) {
-                    printf("  Byte %zu: %02X\n", i, data[i]);
-                }
+    // Zone read positive response. The reply's own service byte decides the
+    // framing, never the ECU's nominal protocol: readZone() promotes any zone id
+    // above 0xFF to UDS "22 hi lo" even on a KWP ECU -- RD4's 0x2A00 radio config
+    // is the everyday case -- and such an ECU answers "62 hi lo". Taking the id
+    // from pdu[1] alone yielded 0x2A instead of 0x2A00 and slid every data byte
+    // one position left, so every decoded field came out wrong.
+    if (service == kwp::PosRead || service == uds::PosRead) {
+        const bool wide     = (service == uds::PosRead);
+        const uint16_t zid  = wide ? ((static_cast<uint16_t>(pdu[1]) << 8) | pdu[2])
+                                   : pdu[1];
+        const size_t off    = wide ? 3 : 2;
+        const uint8_t* data = pdu + off;
+        const size_t data_len = (len > off) ? len - off : 0;
+
+        if (lidscan_active_) {
+            lidscan_hits_++;
+            printf("[LIDSCAN] %04X: %zu bytes: ", zid, data_len);
+            printHex(data, data_len);
+            // ASCII alongside the hex: identification zones (VIN, part numbers,
+            // supplier strings) are the ones worth spotting at a glance.
+            bool printable = data_len > 0;
+            for (size_t i = 0; i < data_len && printable; ++i)
+                if (data[i] < 0x20 || data[i] > 0x7E) printable = false;
+            if (printable) {
+                printf("  \"");
+                for (size_t i = 0; i < data_len; ++i) printf("%c", data[i]);
+                printf("\"");
             }
-            config_zone_index_++;
-            if (config_zone_index_ < config_zone_count_) {
-                Req req = readZone(ecu_->proto, config_zones_[config_zone_index_]);
-                sendReq(req);
-                state_ = State::WaitingResponse;
-                response_start_us_ = get_time_us();
-            } else {
-                config_readall_active_ = false;
-                printf("[CONFIG] All zones read.\n");
-            }
-        } else {
-            // Check if response has known zone parameters
-            bool is_uds_response = (service == uds::PosRead);
-            uint16_t zid = is_uds_response
-                ? (static_cast<uint16_t>(pdu[1]) << 8) | pdu[2]
-                : pdu[1];
-            if (isConfigZone(zid)) {
-                size_t data_off = is_uds_response ? 3 : 2;
-                printf("[CONFIG] Zone %04X:\n", zid);
-                printHex(pdu + data_off, len - data_off);
-                printf("\n");
-                for (size_t c = 0; c < kZoneCategoryCount; ++c) {
-                    for (size_t p2 = 0; p2 < kZoneCategories[c].count; ++p2) {
-                        if (kZoneCategories[c].params[p2].zone_id == zid) {
-                            const BsiZoneParam& bp = kZoneCategories[c].params[p2];
-                            size_t off = bp.byte_offset;
-                            uint8_t byte_val = (off + 1 <= len - data_off) ? pdu[data_off + off] : 0;
-                            uint8_t masked = byte_val & bp.bit_mask;
-                            if (bp.bit_mask != 0xFF && bp.bit_mask != 0) {
-                                uint8_t shift = 0;
-                                uint8_t m = bp.bit_mask;
-                                while ((m & 1) == 0) { m >>= 1; shift++; }
-                                masked >>= shift;
-                            }
-                            printf("  %s: ", bp.name);
-                            if (bp.type == ZT_BOOL) printf("%s\n", masked ? "ON" : "OFF");
-                            else if (bp.type == ZT_ENUM && bp.enum_values) {
-                                const char* v = (masked < 16) ? bp.enum_values[masked] : nullptr;
-                                printf("%s\n", v ? v : "?");
-                            } else printf("%u (0x%02X)\n", masked, masked);
-                        }
-                    }
-                }
-            } else {
-                printZoneData(pdu, len);
-            }
+            printf("\n");
+            lidScanAdvance();
+            return;
         }
-        return;
-    }
-    if (service == kwp::PosRead || service == uds::PosRead) { // 0x61 (KWP) / 0x62 (UDS)
+
         if (config_readall_active_) {
-            // KWP returns 1-byte zone ID at pdu[1]; UDS returns 2 bytes at pdu[1..2]
-            uint16_t zid = (service == uds::PosRead)
-                ? (static_cast<uint16_t>(pdu[1]) << 8) | pdu[2]
-                : pdu[1];
-            printf("[CONFIG] Zone %02X:\n", zid);
-            const uint8_t* data = pdu + 2;
-            size_t data_len = len - 2;
-            const BsiZoneParam* zp = findZoneParam(zid);
-            if (zp) {
-                for (size_t c = 0; c < kZoneCategoryCount; ++c) {
-                    for (size_t p2 = 0; p2 < kZoneCategories[c].count; ++p2) {
-                        if (kZoneCategories[c].params[p2].zone_id == zid) {
-                            const BsiZoneParam& bp = kZoneCategories[c].params[p2];
-                            uint8_t byte_val = (bp.byte_offset < data_len) ? data[bp.byte_offset] : 0;
-                            uint8_t masked = (bp.bit_mask == 0xFF) ? byte_val : (byte_val & bp.bit_mask);
-                            if (bp.bit_mask != 0xFF && bp.bit_mask != 0) {
-                                uint8_t shift = 0;
-                                uint8_t m = bp.bit_mask;
-                                while ((m & 1) == 0) { m >>= 1; shift++; }
-                                masked >>= shift;
-                            }
-                            printf("    %s: ", bp.name);
-                            if (bp.type == ZT_BOOL) printf("%s\n", masked ? "ON" : "OFF");
-                            else if (bp.type == ZT_ENUM && bp.enum_values) {
-                                const char* v = (masked < 16) ? bp.enum_values[masked] : nullptr;
-                                printf("%s\n", v ? v : "?");
-                            } else printf("%u (0x%02X)\n", masked, masked);
-                        }
-                    }
-                }
-            } else {
-                for (size_t i = 0; i < data_len; ++i) {
+            if (!printZoneParams(zid, data, data_len)) {
+                printf("[CONFIG] Zone %04X (no catalogue):\n", zid);
+                for (size_t i = 0; i < data_len; ++i)
                     printf("  Byte %zu: %02X\n", i, data[i]);
-                }
             }
             config_zone_index_++;
             if (config_zone_index_ < config_zone_count_) {
@@ -1390,37 +1474,8 @@ void DiagShell::handleResponse(const uint8_t* pdu, size_t len) {
                 config_readall_active_ = false;
                 printf("[CONFIG] All zones read.\n");
             }
-        } else {
-            uint16_t zid = pdu[1];
-            if (isConfigZone(zid)) {
-                printf("[CONFIG] Zone %02X:\n", zid);
-                printHex(pdu + 2, len - 2);
-                printf("\n");
-                for (size_t c = 0; c < kZoneCategoryCount; ++c) {
-                    for (size_t p2 = 0; p2 < kZoneCategories[c].count; ++p2) {
-                        if (kZoneCategories[c].params[p2].zone_id == zid) {
-                            const BsiZoneParam& bp = kZoneCategories[c].params[p2];
-                            size_t off = bp.byte_offset;
-                            uint8_t byte_val = (off + 1 <= len - 2) ? pdu[2 + off] : 0;
-                            uint8_t masked = byte_val & bp.bit_mask;
-                            if (bp.bit_mask != 0xFF && bp.bit_mask != 0) {
-                                uint8_t shift = 0;
-                                uint8_t m = bp.bit_mask;
-                                while ((m & 1) == 0) { m >>= 1; shift++; }
-                                masked >>= shift;
-                            }
-                            printf("  %s: ", bp.name);
-                            if (bp.type == ZT_BOOL) printf("%s\n", masked ? "ON" : "OFF");
-                            else if (bp.type == ZT_ENUM && bp.enum_values) {
-                                const char* v = (masked < 16) ? bp.enum_values[masked] : nullptr;
-                                printf("%s\n", v ? v : "?");
-                            } else printf("%u (0x%02X)\n", masked, masked);
-                        }
-                    }
-                }
-            } else {
-                printZoneData(pdu, len);
-            }
+        } else if (!printZoneParams(zid, data, data_len)) {
+            printZoneData(pdu, len);
         }
         return;
     }
@@ -1509,7 +1564,8 @@ void DiagShell::printDtcKwp(const uint8_t* pdu, size_t len) {
     printf("[DIAG] %u fault(s):\n", count);
     if (count == 0) { printf("  (none)\n"); return; }
     size_t pos = 2;
-    for (uint8_t i = 0; i < count && pos + 2 < len; ++i) {
+    uint8_t i = 0;
+    for (; i < count && pos + 2 < len; ++i) {
         uint16_t dtc_code = (pdu[pos] << 8) | pdu[pos + 1];
         uint8_t status = (pos + 2 < len) ? pdu[pos + 2] : 0;
         const char* st = (status & 0x80) ? "ACTIVE" : "STORED";
@@ -1519,6 +1575,13 @@ void DiagShell::printDtcKwp(const uint8_t* pdu, size_t len) {
         printf("  DTC %04X - %s (status: %02X) \xE2\x80\x94 %s: %s\n",
                dtc_code, st, status, code_str, desc ? desc : "(no description)");
         pos += 3;
+    }
+    // The ECU's own count byte promised more records than its response actually
+    // carried (a real, observed quirk on this AUTORADIO). Say so instead of
+    // silently under-reporting — matches this project's "don't hide a mismatch" rule.
+    if (i < count) {
+        printf("  ... ECU declared %u fault(s) but response only carried %u "
+               "(ECU-side inconsistency, not a transport error)\n", count, i);
     }
 }
 
@@ -1551,11 +1614,12 @@ void DiagShell::printDtcUds(const uint8_t* pdu, size_t len) {
 void DiagShell::printZoneData(const uint8_t* pdu, size_t len) {
     if (len < 2) { printf("[DIAG] Empty zone response.\n"); return; }
 
-    Protocol p = ecu_->proto;
+    // The reply's service byte, not the ECU's nominal protocol: a KWP ECU still
+    // answers 0x62 when the request was UDS-framed (any zone id above 0xFF).
     size_t header_len;
     uint16_t zone_id;
 
-    if (p == Protocol::UDS && len >= 3) {
+    if (pdu[0] == uds::PosRead && len >= 3) {
         // UDS: 62 XXXX data...
         zone_id = (pdu[1] << 8) | pdu[2];
         header_len = 3;
@@ -1717,11 +1781,25 @@ void DiagShell::cmdLive(const char* arg) {
     live_polling_active_ = true;
     last_poll_us_ = 0;
 
-    const LiveDataParam* param = findParam(ecu_->proto, param_id);
+    const LiveDataParam* param =
+        findParamForEcu(ecu_->family, ecu_->proto, param_id);
     if (!param) {
         printf("[DIAG] Added %04X to live poll list.\n", param_id);
     } else {
         printf("[DIAG] Added %s (%04X) to live poll list.\n", param->name, param->id);
+    }
+}
+
+void DiagShell::cmdRw(const char* arg) {
+    if (strcmp(arg, "on") == 0) {
+        rw_enabled_ = true;
+        printf("[DIAG] R/W mode ENABLED — writes, actuator tests and flashing are live.\n");
+    } else if (strcmp(arg, "off") == 0) {
+        rw_enabled_ = false;
+        printf("[DIAG] Read-only mode.\n");
+    } else {
+        printf("[DIAG] Mode: %s  (use 'rw on' / 'rw off')\n",
+               rw_enabled_ ? "R/W" : "READ-ONLY");
     }
 }
 
@@ -1889,6 +1967,7 @@ void DiagShell::connectByIndex(uint8_t index) {
     const EcuAddr* found = &kEcuTable[index];
     ecu_ = found;
     active_bus_ = busForEcu(ecu_);
+    setBusMode(CanBitrate::Bps500k, /*listen_only=*/false);
     tp_.reset();
     unlocked_ = false;
     manual_pin_valid_ = false;
@@ -1978,14 +2057,70 @@ void DiagShell::advanceScan() {
     }
 }
 
-bool DiagShell::isConfigZone(uint16_t zone_id) {
-    for (size_t i = 0; i < kZoneCategoryCount; ++i) {
-        for (size_t p = 0; p < kZoneCategories[i].count; ++p) {
-            if (kZoneCategories[i].params[p].zone_id == zone_id)
-                return true;
-        }
+void DiagShell::printOneZoneParam(const BsiZoneParam& bp,
+                                  const uint8_t* data, size_t data_len) {
+    uint8_t val = (bp.byte_offset < data_len) ? data[bp.byte_offset] : 0;
+    if (bp.bit_mask != 0 && bp.bit_mask != 0xFF) {
+        uint8_t m = bp.bit_mask;
+        val &= bp.bit_mask;
+        while ((m & 1) == 0) { m >>= 1; val >>= 1; }
     }
-    return false;
+    printf("  %s: ", bp.name);
+    if (bp.type == ZT_STRING) {
+        // No length field in the catalogue, so a string runs to the end of the
+        // zone. Non-printable bytes become '.' rather than reaching the terminal.
+        for (size_t i = bp.byte_offset; i < data_len; ++i)
+            putchar((data[i] >= 0x20 && data[i] < 0x7F) ? data[i] : '.');
+        printf("\n");
+    } else if (bp.type == ZT_BOOL) {
+        printf("%s\n", val ? "ON" : "OFF");
+    } else if (bp.type == ZT_ENUM && bp.enum_values) {
+        // Walk to the terminator instead of indexing blind: the tables are
+        // nullptr-terminated and shorter than the widest value a mask can hold,
+        // so enum_values[val] used to read past the end.
+        size_t n = 0;
+        while (bp.enum_values[n]) ++n;
+        printf("%s\n", val < n ? bp.enum_values[val] : "?");
+    } else {
+        printf("%u (0x%02X)\n", val, val);
+    }
+}
+
+// Decode one config zone, printing its header and raw bytes first. Returns false
+// when nothing describes the zone, so the caller can fall back.
+//
+// Two registries hold zone definitions and only one of them was ever consulted:
+// kZoneCategories carries the BSI's own zones, while every other ECU's zones --
+// RD4's 0x2A00 radio config among them -- live in kEcuParamSets. Zone ids are
+// only unique within an ECU, so the connected ECU's table is searched first.
+bool DiagShell::printZoneParams(uint16_t zid, const uint8_t* data, size_t data_len) {
+    bool any = false;
+    auto emit = [&](const BsiZoneParam& bp) {
+        if (bp.zone_id != zid) return;
+        if (!any) {
+            any = true;
+            printf("[CONFIG] Zone %04X: ", zid);
+            printHex(data, data_len);
+            printf("\n");
+        }
+        printOneZoneParam(bp, data, data_len);
+    };
+
+    const EcuParamSet* set = ecu_ ? findEcuParamSet(ecu_->family) : nullptr;
+    if (set && set->config_params)
+        for (size_t i = 0; i < set->config_count; ++i) emit(set->config_params[i]);
+
+    // Only fall back to the BSI catalogue when the ECU's own table said nothing:
+    // zone ids collide across ECUs (0x2500 is the screen's config on ECRAN_C and
+    // the fuel sender law on the BSI), and running both would print one zone's
+    // bytes under two unrelated sets of field names.
+    if (any) return true;
+
+    for (size_t c = 0; c < kZoneCategoryCount; ++c)
+        for (size_t i = 0; i < kZoneCategories[c].count; ++i)
+            emit(kZoneCategories[c].params[i]);
+
+    return any;
 }
 
 // --- New command implementations --------------------------------------------
@@ -2202,8 +2337,8 @@ void DiagShell::cmdMeas(const char* arg) {
                 live_param_ids_[j] = live_param_ids_[j + 1];
             live_param_count_--;
             if (live_param_idx_ >= live_param_count_) live_param_idx_ = 0;
-            const LiveDataParam* p = findParam(ecu_->proto, param_id);
-            if (!p) p = findParamInCategories(param_id);
+            const LiveDataParam* p =
+                findParamForEcu(ecu_->family, ecu_->proto, param_id);
             printf("[DIAG] Stopped %s (%04X).\n", p ? p->name : "UNKNOWN", param_id);
             if (live_param_count_ == 0) live_polling_active_ = false;
             return;
@@ -2219,8 +2354,8 @@ void DiagShell::cmdMeas(const char* arg) {
     live_polling_active_ = true;
     last_poll_us_ = 0;
 
-    const LiveDataParam* param = findParam(ecu_->proto, param_id);
-    if (!param) param = findParamInCategories(param_id);
+    const LiveDataParam* param =
+        findParamForEcu(ecu_->family, ecu_->proto, param_id);
     if (!param) {
         printf("[DIAG] Added %04X to measurement list.\n", param_id);
     } else {

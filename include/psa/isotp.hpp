@@ -60,6 +60,10 @@ public:
     size_t         pdu_len()  const { return rx_len_; }
     void           reset();
 
+    // True while a multi-frame reply is still being reassembled. Lets a caller
+    // with a short deadline tell "nothing answered" from "answer still arriving".
+    bool           rxActive() const { return in_multi_; }
+
     // --- Transmit side (ISO 15765-2 sender) ---------------------------------
     // Stage a PDU and produce the frame to put on the bus now. For <=7 bytes
     // that is the single frame and the transfer is complete. For longer PDUs it

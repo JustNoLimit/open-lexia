@@ -5,18 +5,13 @@
 #include <cstdint>
 #include <cstddef>
 #include "psa/live_data.hpp"
+#include "psa/ecu_zones.hpp"   // BsiZoneParam, ZoneType, shared enum tables
 
 namespace psa {
 
 // =============================================================================
 // Enum value tables shared across ECUs
 // =============================================================================
-
-inline constexpr const char* kYesNo[] = {
-    "0=No / Absent",
-    "1=Yes / Present",
-    nullptr
-};
 
 inline constexpr const char* kActivatedDeactivated[] = {
     "0=Deactivated",
@@ -915,6 +910,21 @@ inline const EcuParamSet* findEcuParamSet(const char* family) {
         if (!*a && !*b) return &kEcuParamSets[i];
     }
     return nullptr;
+}
+
+// Resolve a live-data id for one ECU. The connected ECU's own table wins, then
+// the protocol table, then the shared categories.
+//
+// Order matters and is not cosmetic: ids repeat across ECUs with different
+// meanings AND different scalings -- 0x0021 is a tyre pressure on DSG and the
+// A/C pressure in the shared catalogue -- so a global-first lookup returns a
+// decoder that produces a plausible-looking but wrong number under a wrong name.
+inline const LiveDataParam* findParamForEcu(const char* family, Protocol p, uint16_t id) {
+    if (const EcuParamSet* s = findEcuParamSet(family))
+        for (size_t i = 0; i < s->meas_count; ++i)
+            if (s->meas_params[i].id == id) return &s->meas_params[i];
+    if (const LiveDataParam* g = findParam(p, id)) return g;
+    return findParamInCategories(id);
 }
 
 } // namespace psa

@@ -424,11 +424,12 @@ void WifiServer::handleHttpRequest(struct tcp_pcb* tpcb, HttpConn* conn) {
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: application/json\r\n"
                 "Connection: close\r\n\r\n"
-                "{\"connected\":%s,\"ecu\":\"%s\",\"unlocked\":%s,\"scan_active\":%s}",
+                "{\"connected\":%s,\"ecu\":\"%s\",\"unlocked\":%s,\"scan_active\":%s,\"rw\":%s}",
                 connected ? "true" : "false",
                 shell_ ? shell_->ecuFamily() : "none",
                 (shell_ && shell_->isUnlocked()) ? "true" : "false",
-                (shell_ && shell_->isScanning()) ? "true" : "false"));
+                (shell_ && shell_->isScanning()) ? "true" : "false",
+                (shell_ && shell_->rwEnabled()) ? "true" : "false"));
         }
     }
     else {

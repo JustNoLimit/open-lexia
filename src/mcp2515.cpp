@@ -148,6 +148,11 @@ McpError Mcp2515::setLoopbackMode() {
 }
 
 McpError Mcp2515::setBaudRate(CanBitrate br) {
+    // Restore whatever mode the caller was in. Forcing listen-only here (the
+    // sniffer's need) silently disarms the transmitter for everyone else: in
+    // listen-only TXREQ is never serviced, so the three TX buffers latch full
+    // and every later send() returns AllTxBusy forever.
+    const uint8_t prev_mode = readReg(MCP_CANSTAT) & CANSTAT_OPMOD;
     if (setMode(REQOP_CONFIG) != McpError::Ok) return McpError::Fail;
 
     const Cnf& cnf = (br == CanBitrate::Bps500k) ? kCnf8MHz500k : kCnf8MHz125k;
@@ -165,7 +170,7 @@ McpError Mcp2515::setBaudRate(CanBitrate br) {
     bitMod(MCP_RXB1CTRL, RXBnCTRL_RXM_MASK, RXBnCTRL_RXM_STDEXT);
 
     setSnifferFilters();
-    return setListenOnlyMode();
+    return setMode(prev_mode == REQOP_CONFIG ? REQOP_LISTENONLY : prev_mode);
 }
 
 bool Mcp2515::hasRx() {

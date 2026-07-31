@@ -37,8 +37,8 @@ struct ZoneCategory {
 // =============================================================================
 
 inline constexpr const char* kYesNo[] = {
-    "0=No",
-    "1=Yes",
+    "0=No / Absent",
+    "1=Yes / Present",
     nullptr
 };
 

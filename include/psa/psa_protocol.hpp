@@ -32,9 +32,13 @@ inline constexpr EcuAddr kEcuTable[] = {
     {"INJ",      0x6A8, 0x688, Protocol::KWP_IS,  "Engine ECU (EDC16/SID80/MM6/DCM)"},
     {"BMF",      0x752, 0x652, Protocol::KWP_IS,  "BSI (central gateway)"},
     {"ABRASR",   0x6AD, 0x68D, Protocol::KWP_IS,  "ABS / ESP"},
-    {"AIRBAG",   0x744, 0x644, Protocol::KWP_IS,  "Airbag / SRS"},
+    // AIRBAG/COMBINE were KWP_IS; on the real car both rejected 0x81 with
+    // NRC 11 (service not supported) — the signature of the wrong KWP form,
+    // not a real precondition failure (compare BSI's NRC 22 below, which
+    // means the service byte WAS recognised). Switched to KWP_HAB.
+    {"AIRBAG",   0x744, 0x644, Protocol::KWP_HAB, "Airbag / SRS"},
     {"CLIM",     0x76D, 0x66D, Protocol::KWP_HAB, "Climate control"},
-    {"COMBINE",  0x75F, 0x65F, Protocol::KWP_IS,  "Instrument cluster"},
+    {"COMBINE",  0x75F, 0x65F, Protocol::KWP_HAB, "Instrument cluster"},
     {"DIRECTN",  0x6B5, 0x695, Protocol::KWP_IS,  "Electric power steering (EPS)"},
     {"HDC",      0x742, 0x642, Protocol::KWP_HAB, "Steering-wheel COM2000"},
     {"BOITEVIT", 0x6A9, 0x689, Protocol::KWP_IS,  "Automatic gearbox"},

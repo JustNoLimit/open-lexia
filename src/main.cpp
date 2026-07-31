@@ -14,6 +14,28 @@ namespace {
 // two receive buffers plus a burst, without letting a busy bus starve Wi-Fi/USB.
 constexpr int kMaxRxPerPass = 8;
 
+// Raw bus monitor (`sniff raw`). A live CAN-HS bus carries well over a thousand
+// frames a second; printing each one would flood the SSE stream and the USB
+// console faster than either can drain, stalling the main loop the watchdog is
+// watching. So the monitor samples instead: a few lines per window is plenty to
+// show which identifiers are actually present. To follow one identifier without
+// sampling, use `gsniff watch <hs|ls> <id>`.
+constexpr int      kRawLinesPerWindow = 4;
+constexpr uint64_t kRawWindowUs       = 200'000;
+
+void dump_raw(const psa::CanFrame& f) {
+    static uint64_t window_start = 0;
+    static int      printed = 0;
+    uint64_t now = time_us_64();
+    if (now - window_start > kRawWindowUs) { window_start = now; printed = 0; }
+    if (printed >= kRawLinesPerWindow) return;
+    ++printed;
+
+    printf("[RAW] %03X [%u]", static_cast<unsigned>(f.id), f.dlc);
+    for (uint8_t i = 0; i < f.dlc && i < 8; ++i) printf(" %02X", f.data[i]);
+    printf("\n");
+}
+
 void decode_sniffed(psa::Bus bus, const psa::CanFrame& f) {
     // CAN2004 decoder for Citroen C5 Mk1 FL.
     // CAN IDs and byte layouts from cross-ref: ludwig-v/arduino-psa-comfort-can-adapter,
@@ -237,6 +259,7 @@ int main() {
             if (can.read(psa::Bus::HighSpeed, f) != psa::McpError::Ok) break;
             if (!shell.feedDiagFrame(f)) {
                 if (shell.gsniffActive()) shell.feedCaptureFrame(psa::Bus::HighSpeed, f);
+                else if (shell.sniffRaw()) dump_raw(f);
                 else if (shell.sniffEnabled()) decode_sniffed(psa::Bus::HighSpeed, f);
             }
         }

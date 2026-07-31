@@ -837,12 +837,38 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
 
   var st = {
     connected: false, ecu: null, unlocked: false, scanning: false,
+    rw: false,           // write protection; firmware is the authority
     dtcs: [], meas: { name: "—", unit: "", hist: [] }, activeParams: {},
     identReading: false,
     cfgRaw: {},          // zoneHex -> [byte,...] last read
     cfgPendingZone: null, // zone whose raw hex line we're expecting
     cfgReading: false, cfgQueue: null, cfgTimer: null,
+    sniffRate: "hs", sniffing: false,
+    // Full session transcript, kept beyond what the DOM shows: the console and
+    // the sniff feed drop old nodes to stay fast, but a capture you want to
+    // analyse later must not be trimmed to the last screenful.
+    log: [], sniffLog: [],
+    lid: { running: false, rows: [], ecu: null },
   };
+  var LOG_MAX = 20000;   // ~1.5 MB of text; well within a phone browser's reach
+
+  function stamp() { return new Date().toISOString().slice(11, 23); }
+
+  // Save straight to the device's own downloads folder — phone or PC alike.
+  // No firmware round-trip: the browser already holds every line.
+  function downloadText(name, text) {
+    var blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+  function fileStamp() {
+    return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  }
 
   // ---- theme ----
   function applyTheme(t) {
@@ -863,6 +889,28 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     applyTheme(document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light");
   }
 
+  // ---- write protection ----
+  // The firmware owns this state and enforces it at command dispatch; the button
+  // only mirrors it. Never assume a toggle succeeded -- re-read /api/data.
+  function setRw(on) {
+    st.rw = !!on;
+    $("btnRw").classList.toggle("rw-on", st.rw);
+    $("btnRw").classList.toggle("rw-off", !st.rw);
+    $("app").classList.toggle("read-only", !st.rw);
+    $("rwLabel").textContent = st.rw ? "R/W MODE" : "READ-ONLY";
+    $("btnRw").title = st.rw
+      ? "R/W mode: writes, actuator tests and flashing reach the car. Click for read-only."
+      : "Read-only: zone writes, DTC clears, actuator tests and flashing are blocked. Click to enable R/W.";
+  }
+  function toggleRw() {
+    if (!st.rw && !confirm("Enable R/W mode?\n\nZone writes, DTC clears, actuator tests and flashing will reach the car.")) return;
+    cmd(st.rw ? "rw off" : "rw on").then(syncRw);
+  }
+  function syncRw() {
+    return fetch("/api/data?type=status").then(function (r) { return r.json(); })
+      .then(function (s) { setRw(s.rw); }).catch(function () {});
+  }
+
   // ---- command transport ----
   function cmd(c) {
     logLine("› " + c, "tx");
@@ -877,6 +925,12 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
 
   // ---- console ----
   function logLine(text, cls) {
+    // Every line funnels through here — device output and commands we send —
+    // so this is the one place that has to remember it.
+    st.log.push(stamp() + "  " + text);
+    if (st.log.length > LOG_MAX) st.log.shift();
+    $("logCount").textContent = st.log.length + " lines";
+
     var out = $("consoleOut");
     var d = document.createElement("div");
     d.className = "ln " + (cls || classify(text));
@@ -967,7 +1021,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       var li = document.createElement("li");
       li.innerHTML = '<span class="act-name">' + esc(a.name) + '</span>' +
         (a.desc ? '<span class="act-desc">' + esc(a.desc) + '</span>' : '') +
-        '<button class="btn" data-act="' + hx(a.id) + '">Activate ' + hx(a.id) + '</button>';
+        '<button class="btn needs-rw" data-act="' + hx(a.id) + '">Activate ' + hx(a.id) + '</button>';
       li.querySelector("button").addEventListener("click", function () {
         cmd("actuator " + hx(a.id));
       });
@@ -996,13 +1050,116 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     var dis = !on;
     ["btnIdent", "btnReadDtc", "btnClearDtc", "btnMeasAdd", "btnMeasStop",
       "btnCfgReadAll", "cfgSearch", "btnUnlock", "measSelect", "btnFlashStatus", "btnFlashCancel",
-      "btnFlashEnd", "btnFlashSend"].forEach(function (b) { if ($(b)) $(b).disabled = dis; });
+      "btnFlashEnd", "btnFlashSend", "btnLidScan"].forEach(function (b) { if ($(b)) $(b).disabled = dis; });
+    // A sweep cannot outlive the session it runs in.
+    if (!on && st.lid.running) lidSetRunning(false);
     if (!on) { setLock(false); $("ecuMeta").textContent = "disconnected"; }
   }
 
   // ---- SSE parsing ----
+  function sniffLine(t) {
+    st.sniffLog.push(stamp() + "  " + t);
+    if (st.sniffLog.length > LOG_MAX) st.sniffLog.shift();
+
+    var feed = $("sniffFeed");
+    if (feed.firstElementChild && feed.firstElementChild.tagName === "P") feed.innerHTML = "";
+    var d = document.createElement("div");
+    d.className = "ln";
+    d.textContent = t;
+    feed.appendChild(d);
+    while (feed.childNodes.length > 300) feed.removeChild(feed.firstChild);
+    feed.scrollTop = feed.scrollHeight;
+  }
+
+  // ---- identifier discovery (lidscan) ----
+  function lidSetRunning(on) {
+    st.lid.running = on;
+    $("btnLidScan").disabled = on || !st.connected;
+    $("btnLidStop").disabled = !on;
+    $("lidFrom").disabled = on;
+    $("lidTo").disabled = on;
+  }
+  function lidAddRow(id, len, resp, kind) {
+    st.lid.rows.push({ id: id, len: len, resp: resp, kind: kind });
+    var tr = document.createElement("tr");
+    tr.className = "lid-" + kind;
+    tr.innerHTML = '<td class="mn">' + esc(id) + '</td>'
+      + '<td>' + esc(len) + '</td>'
+      + '<td class="lid-resp">' + esc(resp) + '</td>'
+      + '<td><button class="del lid-add" title="Add to live measurements">+ live</button></td>';
+    // Straight from discovery to measurement: the identifier we just found is
+    // the one worth watching while the engine runs.
+    tr.querySelector(".lid-add").addEventListener("click", function () {
+      cmd("meas " + id);
+      addMeasRow(id, "ID " + id);
+    });
+    $("lidBody").appendChild(tr);
+    $("lidTable").style.display = "";
+    $("btnLidSave").disabled = false;
+  }
+  function handleLidLine(t) {
+    var m;
+    if ((m = t.match(/^\[LIDSCAN\] Sweeping (\w+)\.\.(\w+) on (\w+)/))) {
+      st.lid.rows = []; st.lid.ecu = m[3];
+      $("lidBody").innerHTML = "";
+      $("lidTable").style.display = "none";
+      $("btnLidSave").disabled = true;
+      lidSetRunning(true);
+      $("lidStatus").textContent = "scanning " + m[1] + "…" + m[2] + " on " + m[3];
+      return;
+    }
+    if ((m = t.match(/^\[LIDSCAN\] ([0-9A-Fa-f]+): (\d+) bytes: (.+)$/))) {
+      lidAddRow(m[1], m[2] + " B", m[3], "ok");
+      return;
+    }
+    if ((m = t.match(/^\[LIDSCAN\] ([0-9A-Fa-f]+): present, refused \(NRC (\w+)\)/))) {
+      // Exists but locked — unlock and scan again to read it.
+      lidAddRow(m[1], "—", "locked (NRC " + m[2] + ") — unlock first", "locked");
+      return;
+    }
+    if ((m = t.match(/^\[LIDSCAN\] \.\.\.(\w+)/))) {
+      $("lidStatus").textContent = "at " + m[1] + " · " + st.lid.rows.length + " found";
+      return;
+    }
+    if ((m = t.match(/^\[LIDSCAN\] (Done|Stopped|Aborted)\b/))) {
+      lidSetRunning(false);
+      $("lidStatus").textContent = t.replace("[LIDSCAN] ", "");
+      return;
+    }
+    // Anything else (Not connected / Busy / Usage / range error) means the sweep
+    // never started or already ended; do not leave the buttons stuck.
+    lidSetRunning(false);
+    $("lidStatus").textContent = t.replace("[LIDSCAN] ", "");
+  }
+
+  // Help pane filter: hide rows that do not match, then hide any section whose
+  // rows are all gone so the headings do not float over nothing.
+  function helpFilter(q) {
+    var needle = (q || "").toLowerCase();
+    Array.prototype.forEach.call($("helpBody").querySelectorAll("table.help-tbl"), function (tbl) {
+      var shown = 0;
+      Array.prototype.forEach.call(tbl.rows, function (row) {
+        var hit = !needle || row.textContent.toLowerCase().indexOf(needle) >= 0;
+        row.style.display = hit ? "" : "none";
+        if (hit) shown++;
+      });
+      tbl.style.display = shown ? "" : "none";
+      var head = tbl.previousElementSibling;
+      while (head && head.tagName !== "H3") head = head.previousElementSibling;
+      // A note paragraph belongs to the table below it, so it follows the table.
+      var note = tbl.previousElementSibling;
+      if (note && note.tagName === "P") note.style.display = shown ? "" : "none";
+      if (head) head.style.display = shown ? "" : "none";
+    });
+  }
+
   function handleLine(t) {
     logLine(t);
+
+    // Bus traffic goes to the Sniffer pane, not just the console drawer — the
+    // drawer is often minimised, which is what made the monitor look dead.
+    if (/^\[(RAW|HS|LS)\] /.test(t)) { sniffLine(t); return; }
+    if (t.indexOf("[LIDSCAN] ") === 0) { handleLidLine(t); return; }
 
     var m;
     // connection
@@ -1138,7 +1295,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
           '<span class="cfg-zone code">zone ' + zh + ' · byte ' + p.byte + ' · mask 0x' + p.mask.toString(16).toUpperCase() + '</span></div>';
         var right = document.createElement("div"); right.className = "cfg-act";
         var cur = document.createElement("span"); cur.className = "cfg-cur muted"; cur.textContent = "—";
-        var apply = document.createElement("button"); apply.className = "btn mini"; apply.textContent = "Apply"; apply.disabled = true;
+        var apply = document.createElement("button"); apply.className = "btn mini needs-rw"; apply.textContent = "Apply"; apply.disabled = true;
         apply.addEventListener("click", function () { cfgApply(row, ctrl, p); });
         right.appendChild(cur); right.appendChild(ctrl); right.appendChild(apply);
         row.appendChild(right);
@@ -1329,15 +1486,42 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     $("btnGlobalTest").addEventListener("click", function () {
       st.dtcs = []; renderDtc(); cmdSeq("exit", "scan");
     });
-    $("btnSniff").addEventListener("click", function () {
+    $("btnRw").addEventListener("click", toggleRw);
+    // Sniffer and Help both take over the whole workspace: no ECU tree, no
+    // function tabs. Same show/hide either way, so it lives in one place.
+    function openFullPane(name, btn) {
       document.querySelectorAll(".ftab").forEach(function (x) { x.classList.remove("active"); });
       document.querySelectorAll(".pane").forEach(function (x) { x.classList.remove("active"); });
-      document.querySelector('.pane[data-pane="sniff"]').classList.add("active");
+      document.querySelector('.pane[data-pane="' + name + '"]').classList.add("active");
       document.querySelector('.ecu-bar').style.display = 'none';
       document.querySelector('.func-tabs').style.display = 'none';
-      document.getElementById('sidebar').style.display = 'none';
-      this.classList.add("active");
+      $("sidebar").style.display = 'none';
+      $("btnSniff").classList.remove("active");
+      $("btnHelp").classList.remove("active");
+      btn.classList.add("active");
+    }
+    function closeFullPane() {
+      document.querySelectorAll(".ftab").forEach(function (x) { x.classList.remove("active"); });
+      document.querySelectorAll(".pane").forEach(function (x) { x.classList.remove("active"); });
+      document.querySelector('.ftab[data-fn="ident"]').classList.add("active");
+      document.querySelector('.pane[data-pane="ident"]').classList.add("active");
+      document.querySelector('.ecu-bar').style.display = '';
+      document.querySelector('.func-tabs').style.display = '';
+      $("sidebar").style.display = '';
+      $("btnSniff").classList.remove("active");
+      $("btnHelp").classList.remove("active");
+    }
+    // Both are toggles: the button that opened the pane closes it again, so
+    // there is no separate "back" control to hunt for.
+    $("btnSniff").addEventListener("click", function () {
+      if (this.classList.contains("active")) exitSniffer();
+      else openFullPane("sniff", this);
     });
+    $("btnHelp").addEventListener("click", function () {
+      if (this.classList.contains("active")) closeFullPane();
+      else openFullPane("help", this);
+    });
+    $("helpSearch").addEventListener("input", function () { helpFilter(this.value); });
     $("btnPdi").addEventListener("click", function () { cmdSeq("exit", "pdi"); });
 
     $("btnUnlock").addEventListener("click", function () {
@@ -1362,6 +1546,34 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       cmd("meas " + hex);
       addMeasRow(hex, label);
     });
+    $("btnLidScan").addEventListener("click", function () {
+      var hex = function (el, dflt) {
+        // Drop a "0x" prefix before filtering, or the x alone would be stripped
+        // and "0x01" would silently become "001".
+        var v = (el.value || "").trim().replace(/^0[xX]/, "")
+                  .replace(/[^0-9a-fA-F]/g, "").toUpperCase().slice(0, 4);
+        if (!v) { v = dflt; }
+        el.value = v;
+        return v;
+      };
+      var from = hex($("lidFrom"), "00"), to = hex($("lidTo"), "FF");
+      if (parseInt(to, 16) < parseInt(from, 16)) {
+        $("lidStatus").textContent = "end is below start";
+        return;
+      }
+      cmd("lidscan " + from + " " + to);
+    });
+    $("btnLidStop").addEventListener("click", function () { cmd("lidscan stop"); });
+    $("btnLidSave").addEventListener("click", function () {
+      if (!st.lid.rows.length) return;
+      var head = "# Identifier scan · " + (st.lid.ecu || "?") + " · " + new Date().toISOString() +
+                 "\n# id\tlength\tresponse\n";
+      downloadText("lidscan-" + (st.lid.ecu || "ecu") + "-" + fileStamp() + ".tsv",
+        head + st.lid.rows.map(function (r) {
+          return r.id + "\t" + r.len + "\t" + r.resp;
+        }).join("\n") + "\n");
+    });
+
     $("btnMeasStop").addEventListener("click", function () {
       cmd("meas off");
       clearMeasTable();
@@ -1383,30 +1595,73 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
       lines.reduce(function (p, l) { return p.then(function () { return cmd("flash " + l); }); }, Promise.resolve());
     });
 
-    // sniff monitor — raw CAN bus viewer with HS/LS baud rate selection
-    $("btnSniffBack").addEventListener("click", function () {
-      document.querySelectorAll(".ftab").forEach(function (x) { x.classList.remove("active"); });
-      document.querySelectorAll(".pane").forEach(function (x) { x.classList.remove("active"); });
-      document.querySelector('.ftab[data-fn="ident"]').classList.add("active");
-      document.querySelector('.pane[data-pane="ident"]').classList.add("active");
-      document.querySelector('.ecu-bar').style.display = '';
-      document.querySelector('.func-tabs').style.display = '';
-      document.getElementById('sidebar').style.display = '';
-      $("btnSniff").classList.remove("active");
-    });
+    // sniff monitor — raw CAN bus viewer with HS/LS baud rate selection.
+    // Leaving the pane has to undo what entering it did to the controller.
+    function exitSniffer() {
+      closeFullPane();
+      setSniffing(false);
+      cmd("sniff off");   // otherwise bus traffic keeps filling the console
+      // gsniff rate hs/ls leaves the MCP2515 in listen-only mode (and possibly
+      // 125k) — TXREQ is never serviced there, so every later transmit latches
+      // the 3 TX buffers full and dies with "bus busy". Only 'connect' restores
+      // normal mode: reconnect to whichever ECU was selected before Sniffer.
+      if (st.ecu) cmdSeq("exit", "connect " + st.ecu);
+    }
     Array.prototype.forEach.call(document.querySelectorAll(".sftab"), function (tab) {
       tab.addEventListener("click", function () {
         document.querySelectorAll(".sftab").forEach(function (x) { x.classList.remove("active"); });
         tab.classList.add("active");
-        cmd("gsniff rate " + tab.dataset.rate);
+        st.sniffRate = tab.dataset.rate;
+        cmd("gsniff rate " + st.sniffRate);
       });
     });
-    $("btnSniffClear").addEventListener("click", function () { $("consoleOut").innerHTML = ""; });
+    function setSniffing(on) {
+      st.sniffing = on;
+      $("btnSniffStart").disabled = on;
+      $("btnSniffStop").disabled = !on;
+    }
+    $("btnSniffStart").addEventListener("click", function () {
+      $("sniffFeed").innerHTML = '<p class="muted">Listening…</p>';
+      // Always re-send the rate: it is what puts the MCP2515 into listen-only at
+      // the selected baud. Starting without it would sniff at whatever rate and
+      // mode the last diagnostic session left behind.
+      setSniffing(true);
+      cmdSeq("gsniff rate " + st.sniffRate,
+             $("chkSniffRaw").checked ? "sniff raw" : "sniff on");
+    });
+    $("btnSniffStop").addEventListener("click", function () {
+      setSniffing(false);
+      cmd("sniff off");
+    });
+    $("chkSniffRaw").addEventListener("change", function () {
+      if (st.sniffing) cmd(this.checked ? "sniff raw" : "sniff on");
+    });
+    $("btnSniffSave").addEventListener("click", function () {
+      if (!st.sniffLog.length) { logLine("[ui] nothing captured yet", "warn"); return; }
+      downloadText("can-capture-" + st.sniffRate + "-" + fileStamp() + ".txt",
+                   "# Citroen C5 CAN capture · " + st.sniffRate.toUpperCase() +
+                   " · " + st.sniffLog.length + " lines\n" + st.sniffLog.join("\n") + "\n");
+    });
+    $("btnSniffClear").addEventListener("click", function () {
+      $("sniffFeed").innerHTML = "";
+      $("consoleOut").innerHTML = "";
+      st.sniffLog = [];
+    });
 
     // sidebar toggle
     $("sideToggle").addEventListener("click", function () { $("sidebar").classList.toggle("collapsed"); });
     // console
-    $("btnClearLog").addEventListener("click", function () { $("consoleOut").innerHTML = ""; });
+    $("btnSaveLog").addEventListener("click", function () {
+      if (!st.log.length) return;
+      downloadText("diag-session-" + fileStamp() + ".log",
+                   "# Citroen C5 diagnostic session · " + new Date().toISOString() +
+                   " · " + st.log.length + " lines\n" + st.log.join("\n") + "\n");
+    });
+    $("btnClearLog").addEventListener("click", function () {
+      $("consoleOut").innerHTML = "";
+      st.log = [];
+      $("logCount").textContent = "0 lines";
+    });
     $("btnConsoleToggle").addEventListener("click", function () {
       var c = $("console"); c.classList.toggle("min");
       $("btnConsoleToggle").textContent = c.classList.contains("min") ? "▴" : "▾";
@@ -1436,6 +1691,7 @@ ACTUATOR_TESTS['PROJECTEURS'] = [
     fetch("/api/data?type=status").then(function (r) { return r.json(); }).then(function (s) {
       if (s.connected) { setConnected(true); if (s.ecu && s.ecu !== "none") { selectEcuSilent(s.ecu); } }
       if (s.unlocked) setLock(true);
+      setRw(s.rw);
     }).catch(function () {});
   }
   function selectEcuSilent(id) {

@@ -109,6 +109,7 @@ inline constexpr DtcText kDtcText[] = {
     {0x0404, "EGR range/performance"},
     {0x0405, "EGR sensor A low"},
     {0x0420, "Catalyst efficiency below threshold B1"},
+    {0x0463, "Fuel level sensor circuit high input"},
     {0x0470, "Exhaust pressure sensor circuit"},
     {0x0471, "Exhaust pressure sensor range/performance"},
     {0x0480, "Cooling fan 1 control circuit"},
@@ -122,6 +123,7 @@ inline constexpr DtcText kDtcText[] = {
     {0x0560, "System voltage malfunction"},
     {0x0562, "System voltage low"},
     {0x0563, "System voltage high"},
+    {0x0571, "Cruise control/brake switch A circuit"},
     // Control module
     {0x0600, "Serial communication link"},
     {0x0601, "Internal control module checksum error"},
@@ -129,9 +131,12 @@ inline constexpr DtcText kDtcText[] = {
     {0x0606, "Control module processor fault"},
     // Transmission
     {0x0700, "Transmission control system"},
+    {0x0704, "Clutch switch input circuit"},
     {0x0705, "Transmission range sensor circuit"},
     {0x0715, "Input/turbine speed sensor circuit"},
     {0x0720, "Output speed sensor circuit"},
+    // Chassis (C-codes) — PSA-specific
+    {0x5301, "Brake pedal switch / ABS pressure sensor coherence"}, // C1301
     // Network (U-codes)
     {0xC001, "High-speed CAN communication bus"},   // U0001
     {0xC100, "Lost communication with ECM/PCM A"},  // U0100
@@ -139,6 +144,7 @@ inline constexpr DtcText kDtcText[] = {
     {0xC121, "Lost communication with ABS module"}, // U0121
     {0xC126, "Lost communication with steering angle sensor"}, // U0126
     {0xC155, "Lost communication with instrument cluster"},    // U0155
+    {0xC415, "Invalid data from ABS control module"},          // U0415
 
     // --- PSA manufacturer-specific (P1xxx/P2xxx) ------------------------------
     // Diagbox meanings for the common EDC16/DCM HDi ECUs. IMPORTANT: PSA remaps

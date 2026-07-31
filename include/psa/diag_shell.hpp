@@ -10,6 +10,7 @@
 #include "psa/psa_protocol.hpp"
 #include "psa/flash_engine.hpp"
 #include "psa/can_sniffer.hpp"
+#include "psa/ecu_zones.hpp"
 
 namespace psa {
 
@@ -46,8 +47,14 @@ public:
     // Accessors
     State state() const { return state_; }
     bool  sniffEnabled() const { return sniff_enabled_; }
+    // `sniff raw`: dump every frame as hex instead of decoding known IDs only.
+    // The decoder covers ~50 IDs; everything else used to vanish silently, which
+    // made a working bus look like a dead one.
+    bool  sniffRaw() const { return sniff_raw_; }
     bool  isConnected() const { return state_ == State::Connected || state_ == State::WaitingResponse; }
     bool  isUnlocked() const { return unlocked_; }
+    // False until the user explicitly leaves read-only mode.
+    bool  rwEnabled() const { return rw_enabled_; }
     bool  isScanning() const { return scan_active_; }
     const char* ecuFamily() const { return ecu_ ? ecu_->family : "none"; }
     Bus   activeBus() const { return active_bus_; }
@@ -85,11 +92,14 @@ private:
     void cmdEsp(const char* arg);
     void cmdPdi();
     void cmdPin(const char* arg);
+    void cmdRw(const char* arg);
     void cmdHwtest();
     void cmdGuidedSniff(const char* arg);
+    void cmdLidScan(const char* arg);
     void cmdHelp();
 
     // --- Internal helpers ---
+    void setBusMode(CanBitrate rate, bool listen_only);
     void sendReq(const Req& req);
     void sendPdu(const uint8_t* pdu, size_t len);
     // Put one frame on the active bus, retrying while the controller's three
@@ -113,7 +123,8 @@ private:
     void connectByIndex(uint8_t index);
     void printScanResults();
     void advanceScan();
-    bool isConfigZone(uint16_t zone_id);
+    void printOneZoneParam(const BsiZoneParam& bp, const uint8_t* data, size_t data_len);
+    bool printZoneParams(uint16_t zid, const uint8_t* data, size_t data_len);
 
     // --- Line buffer ---
     static constexpr size_t kLineBufSize = 128;
@@ -129,9 +140,11 @@ private:
     const EcuAddr*  ecu_ = nullptr;     // currently connected ECU
     Bus             active_bus_ = Bus::HighSpeed;
     bool            sniff_enabled_ = true;
+    bool            sniff_raw_ = false;
     Bus             sniff_bus_ = Bus::HighSpeed;
     CanSniffer      sniffer_;
     bool            unlocked_ = false;
+    bool            rw_enabled_ = false;   // read-only until asked otherwise
     uint16_t        manual_pin_ = 0;        // user-supplied SecurityAccess PIN (`pin` cmd)
     bool            manual_pin_valid_ = false;
     uint8_t         pending_count_ = 0;     // consecutive 0x78 ResponsePending replies
@@ -161,6 +174,23 @@ private:
     uint8_t   scan_index_;
     bool      scan_active_;
     bool      pdi_active_;
+
+    // --- LID/DID sweep state (`lidscan`) ---
+    // Read-only discovery sweep: asks the ECU for every identifier in a range
+    // and reports which ones answer. This is how the missing PSA measurement
+    // tables (live_data.hpp) get filled in — there is no public source for them.
+    bool      lidscan_active_ = false;
+    uint16_t  lidscan_id_ = 0;
+    uint16_t  lidscan_first_ = 0;
+    uint16_t  lidscan_end_ = 0;
+    uint16_t  lidscan_hits_ = 0;
+    uint64_t  lidscan_sent_us_ = 0;
+    // An identifier nothing answers is simply not implemented; the ECU stays
+    // silent rather than rejecting. Waiting the full 5 s response timeout for
+    // each of 256 would take 20 minutes, so the sweep gives up much sooner.
+    static constexpr uint64_t kLidScanTimeoutUs = 300'000;
+    void lidScanSend();
+    void lidScanAdvance();
 
     // --- Config read state ---
     bool      config_readall_active_;
