@@ -5,6 +5,44 @@
 
 ---
 
+## 0g. GÜNCELLEME — 2026-08-01 (pypsadiag özellik parite: eco mode disable + PIN cracker; kritik SecurityAccess bug fix)
+
+Kullanıcı isteği: pypsadiag'daki "pin kırma" ve "eco mode'a geçmeyi engelleme" özellikleri.
+pypsadiag (Barracuda09/pypsadiag) kaynağı indirilip incelendi (`main.py::disableEcoMode`,
+`PINExtractor.py`), ludwig-v/psa-seedkey-algorithm'ın kanonik kaynağına (`algorithm.c/.py`,
+CIROCCO assembly trace) karşı doğrulandı.
+
+- **Yeni `ecodisable` komutu.** BSI'a `connect BMF` + `unlock` sonrası RoutineControl
+  `31 01 DF 0A 3C` gönderir — bytes ve BSI key (`B4E0`, `pin B4E0` ile) pypsadiag'ın
+  `disableEcoMode()`'undan birebir. rw-guard'a eklendi (write komutu).
+  ([diag_shell.cpp](src/diag_shell.cpp) `cmdEcoDisable`)
+- **Yeni `pincrack <chal8hex> <resp8hex> [...]` komutu.** 4 karakterli alfanümerik
+  immobilizer PIN'ini, `0x072`/`0x0A8` CAN ID'lerinden yakalanan challenge/response
+  çiftlerinden çevrimdışı brute-force ile bulur (36^4 aday, ECU bağlantısı gerekmez).
+  `main.cpp`'deki `0x072`/`0x0A8` decode'ları artık ham hex payload'ı basıyor (bytes[1..4])
+  — önceden sadece etiket yazdırıyordu, yakalanacak veri yoktu.
+  ([diag_shell.cpp](src/diag_shell.cpp) `cmdPincrack`/`immoComputeResponse`)
+- **KRİTİK BUG FIX — `seed_key::transform()` gerçek SecurityAccess unlock'u kırıyordu.**
+  Bu proje `data`'yı hep unsigned böldürüyordu; kanonik kaynak (algorithm.c: `int16_t data`,
+  algorithm.py: `_to_int16()`, CIROCCO trace'teki `SXTH`/`ASR#31` düzeltme terimi) `data`'yı
+  **signed** 16-bit olarak bölüyor. Fark sadece `msb >= 0x80` olduğunda ortaya çıkıyor —
+  yani pin/seed byte çiftlerinin **yaklaşık yarısında** yanlış key üretiliyordu. `unlock`
+  hiç gerçek araçta denenmediği için bu şimdiye kadar yakalanamamıştı (bkz. §6). Düzeltildi
+  ve `algorithm.py`'den üretilen 2000+ (pin,seed)→key referans vektörüne karşı bit-bit
+  doğrulandı (host test'te değil, ayrı bir doğrulama script'iyle — regresyon sentinel'i
+  `tests/test_psa.cpp::test_seedkey_known_vector` güncellendi, eski hatalı değer 0x46E33D53
+  → doğru değer 0x15C035DD). `pincrack`'in kullandığı immo-PIN kombinatörü de aynı
+  `transform()`'u paylaşıyor, dolayısıyla aynı düzeltmeden faydalandı — `PINExtractor.py`'nin
+  kendi `compute_response()`'una karşı 500 rastgele vektörle doğrulandı (0 uyuşmazlık).
+  ([psa_protocol.hpp](include/psa/psa_protocol.hpp) `seed_key::transform`)
+- **Doğrulama:** Host self-check 3 yeni testle (`test_pincrack` dahil) geçiyor; CMake host
+  yolu da geçiyor; gerçek Pico SDK ile firmware temiz derleniyor (text 501.852/4MB,
+  bss 115.724/520KB — RAM değişmedi, pincrack sadece stack kullanıyor).
+  **`ecodisable` ve `unlock` (düzeltilmiş haliyle) gerçek araçta henüz denenmedi** — bkz. §6,
+  bu ortamda araç/CAN bus yok.
+
+---
+
 ## 0f. GÜNCELLEME — 2026-07-26 (Sniffer yeniden tasarım, ikinci MCP2515 kaldırıldı, CAN ID düzeltmeleri)
 
 ### Mimaride köklü değişiklik: tek MCP2515 yeterli

@@ -23,6 +23,7 @@ static inline uint64_t get_time_us() { return g_fake_time_us; }
 static inline int getchar_nonblocking() { return -1; /* no input in test mode */ }
 #else
 #include "pico/stdlib.h"
+#include "hardware/watchdog.h"
 static inline uint64_t get_time_us() { return to_us_since_boot(get_absolute_time()); }
 static inline int getchar_nonblocking() { return getchar_timeout_us(0); }
 #endif
@@ -103,6 +104,16 @@ bool DiagShell::poll() {
         if (now - response_start_us_ > kResponseTimeoutUs) {
             printf("[DIAG] Response timeout.\n");
             tp_.txReset();
+            // The request itself may still be latched in a transmit buffer. With
+            // nothing on the bus to acknowledge it — ignition off, connector
+            // unplugged — TXREQ never clears on its own, and sendFrame's rescue
+            // only fires once ALL THREE buffers are full, which a single-frame
+            // request never reaches. Left alone the frame sits there and goes
+            // out the moment the bus comes up: a stale session-open, or worse a
+            // stale write, arriving long after we told the user it timed out.
+#ifndef HOST_TEST
+            if (Mcp2515* m = can_->bus(active_bus_)) m->recoverBus();
+#endif
             // Every long-running operation has to be torn down here. Leaving a
             // flag set meant the next unrelated response was fed back into a
             // stale state machine — for a procedure that could resume a write
@@ -309,7 +320,7 @@ void DiagShell::processLine() {
     if (!rw_enabled_) {
         static const char* const kWriteCommands[] = {
             "write", "trace", "clear", "actuator", "flash",
-            "service", "program", "esp", "raw",
+            "service", "program", "esp", "raw", "ecodisable",
         };
         for (const char* w : kWriteCommands) {
             if (strcmp(cmd, w) == 0) {
@@ -380,6 +391,10 @@ void DiagShell::processLine() {
         cmdGuidedSniff(arg);
     } else if (strcmp(cmd, "lidscan") == 0) {
         cmdLidScan(arg);
+    } else if (strcmp(cmd, "ecodisable") == 0) {
+        cmdEcoDisable();
+    } else if (strcmp(cmd, "pincrack") == 0) {
+        cmdPincrack(arg);
     } else {
         printf("[DIAG] Unknown command: '%s'. Type 'help'.\n", cmd);
     }
@@ -429,6 +444,8 @@ void DiagShell::cmdHelp() {
         "  rw [on|off]           Read-only (default) or read/write mode\n"
         "  hwtest                Hardware self-test (SPI + CAN loopback)\n"
         "  gsniff <sub>          Guided CAN signal discovery (gsniff for subcommands)\n"
+        "  ecodisable            Disable Eco Mode (BSI RoutineControl DF0A; needs unlock)\n"
+        "  pincrack <c> <r> ...  Brute-force immo PIN from 072/0A8 challenge/response pairs\n"
         "  help                  This message\n"
     );
 }
@@ -635,6 +652,88 @@ void DiagShell::cmdPin(const char* arg) {
     printf("[DIAG] Manual SecurityAccess PIN set to %04X.\n", pin);
 }
 
+// Immobiliser PIN cracker: brute-forces the 4-char alphanumeric anti-theft PIN
+// from captured (challenge, response) pairs off CAN IDs 0x072/0x0A8 (see the
+// immo_challenge/immo_response sniff lines). Pure offline computation, same
+// cipher primitive as SecurityAccess (psa::seed_key::transform) combined the
+// way pypsadiag's PINExtractor.py does it — ported from that reference, not
+// reverse-derived here. No ECU connection needed.
+namespace {
+uint32_t immoComputeResponse(const uint8_t pin[4], uint32_t challenge) {
+    uint8_t b0 = static_cast<uint8_t>(challenge >> 24);
+    uint8_t b1 = static_cast<uint8_t>(challenge >> 16);
+    uint8_t b2 = static_cast<uint8_t>(challenge >> 8);
+    uint8_t b3 = static_cast<uint8_t>(challenge);
+    long res_msb = seed_key::transform(b0, b2, seed_key::kSec1)
+                 | seed_key::transform(pin[0], pin[3], seed_key::kSec2);
+    long res_lsb = seed_key::transform(b1, b3, seed_key::kSec2)
+                 | seed_key::transform(pin[1], pin[2], seed_key::kSec1);
+    return (static_cast<uint32_t>(res_msb) << 16) | (static_cast<uint32_t>(res_lsb) & 0xFFFF);
+}
+} // namespace
+
+void DiagShell::cmdPincrack(const char* arg) {
+    static constexpr int kMaxPairs = 4;
+    uint32_t chal[kMaxPairs], resp[kMaxPairs];
+    int n = 0;
+
+    const char* p = arg;
+    while (*p && n < kMaxPairs * 2) {
+        while (*p && isspace(static_cast<unsigned char>(*p))) p++;
+        if (!*p) break;
+        uint8_t b[4];
+        bool ok = true;
+        for (int i = 0; i < 4 && ok; ++i) ok = parseHexByte(p + i * 2, &b[i]);
+        if (!ok) { printf("[PINCRACK] Bad hex token (need 8 hex chars per value).\n"); return; }
+        p += 8;
+        if (*p && !isspace(static_cast<unsigned char>(*p))) {
+            printf("[PINCRACK] Bad hex token (need exactly 8 hex chars per value).\n");
+            return;
+        }
+        uint32_t v = (static_cast<uint32_t>(b[0]) << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
+        if (n % 2 == 0) chal[n / 2] = v; else resp[n / 2] = v;
+        n++;
+    }
+    if (n == 0 || n % 2 != 0) {
+        printf("Usage: pincrack <chal8hex> <resp8hex> [<chal8hex> <resp8hex> ...]\n"
+               "  chal = 072 immo_challenge, resp = matching 0A8 immo_response.\n"
+               "  One pair usually leaves a few candidates; a second pair disambiguates.\n");
+        return;
+    }
+    int pairs = n / 2;
+
+    static const char kAlphabet[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    printf("[PINCRACK] Searching %u candidates against %d pair(s)...\n",
+           36u * 36u * 36u * 36u, pairs);
+    int found = 0;
+    uint8_t pin[4];
+    for (int i0 = 0; i0 < 36; ++i0) {
+        pin[0] = static_cast<uint8_t>(kAlphabet[i0]);
+        for (int i1 = 0; i1 < 36; ++i1) {
+            pin[1] = static_cast<uint8_t>(kAlphabet[i1]);
+#ifndef HOST_TEST
+            watchdog_update(); // ~1296 candidates/pet; whole sweep is ~2s, well under 8s
+#endif
+            for (int i2 = 0; i2 < 36; ++i2) {
+                pin[2] = static_cast<uint8_t>(kAlphabet[i2]);
+                for (int i3 = 0; i3 < 36; ++i3) {
+                    pin[3] = static_cast<uint8_t>(kAlphabet[i3]);
+                    if (immoComputeResponse(pin, chal[0]) != resp[0]) continue;
+                    bool ok = true;
+                    for (int k = 1; k < pairs; ++k) {
+                        if (immoComputeResponse(pin, chal[k]) != resp[k]) { ok = false; break; }
+                    }
+                    if (ok) {
+                        printf("[PINCRACK] candidate: %c%c%c%c\n", pin[0], pin[1], pin[2], pin[3]);
+                        found++;
+                    }
+                }
+            }
+        }
+    }
+    printf("[PINCRACK] done, %d candidate(s).\n", found);
+}
+
 void DiagShell::cmdHwtest() {
 #ifdef HOST_TEST
     printf("[HWTEST] Not available in host test mode.\n");
@@ -689,6 +788,14 @@ void DiagShell::cmdHwtest() {
         printf("[HWTEST]   FAIL (could not enter loopback mode)\n");
         return;
     }
+
+    // Start from an empty controller. Anything left over from earlier traffic —
+    // or a request still latched in a transmit buffer, which loopback mode will
+    // happily deliver back to us — is read before our own frame and reported as
+    // a data mismatch, failing the test on hardware that is perfectly fine.
+    m.recoverBus();
+    CanFrame stale{};
+    for (int i = 0; i < 4 && m.hasRx(); ++i) m.read(stale);
 
     CanFrame tx{};
     tx.id = 0x7FF;
@@ -785,6 +892,25 @@ void DiagShell::cmdUnlock() {
     printf("[DIAG] Requesting security seed for %s...\n", ecu_->family);
     // Request seed for config/coding access (config_access = true)
     Req req = securitySeed(ecu_->proto, true);
+    sendReq(req);
+    state_ = State::WaitingResponse;
+    response_start_us_ = get_time_us();
+}
+
+// Disable Eco Mode: BSI RoutineControl DF0A with param 3C. Exact wire bytes and
+// BSI key (B4E0) taken verbatim from pypsadiag's disableEcoMode() — a fixed,
+// unlock-gated RoutineControl call, not a config zone write. Needs 'connect BMF'
+// (or BSI) and 'unlock' first (try 'pin B4E0' if the family-default PIN fails).
+void DiagShell::cmdEcoDisable() {
+    if (!isConnected()) { printf("[DIAG] Not connected. 'connect BMF' first.\n"); return; }
+    if (state_ == State::WaitingResponse) { printf("[DIAG] Waiting for previous response...\n"); return; }
+    if (!unlocked_) {
+        printf("[DIAG] Warning: ECU is not security unlocked. Routine may be rejected.\n");
+    }
+    printf("[DIAG] Sending Disable Eco Mode routine (RoutineControl DF0A)...\n");
+    Req req{{}, 0};
+    req.buf[0] = 0x31; req.buf[1] = 0x01; req.buf[2] = 0xDF; req.buf[3] = 0x0A; req.buf[4] = 0x3C;
+    req.len = 5;
     sendReq(req);
     state_ = State::WaitingResponse;
     response_start_us_ = get_time_us();

@@ -82,14 +82,20 @@ static void test_seedkey_determinism() {
 }
 
 static void test_seedkey_known_vector() {
-    // Regression sentinel: pin=D91C, seed=0 -> fixed expected output.
-    // Hand-traced from ludwig-v/psa-seedkey-algorithm:
-    //   transform(D9,1C,SEC1)=0x46E3  transform(0,0,SEC2)=0 -> r_msb=0x46E3
-    //   transform(0,0,SEC1)=0  transform(46,E3,SEC2)=0x3D53 -> r_lsb=0x3D53
-    //   -> key = 0x46E33D53
+    // Regression sentinel: pin=D91C, seed=0 -> fixed expected output, cross-checked
+    // against ludwig-v/psa-seedkey-algorithm's algorithm.py (the canonical port,
+    // run directly: `python3 algorithm.py 00000000 D91C` -> 15C035DD) rather than
+    // hand-traced. transform(0xD9,0x1C,SEC1) needs the pin's high byte (0xD9) to be
+    // divided as a SIGNED 16-bit value (data=0xD91C -> -9956, per the CIROCCO
+    // SXTH/ASR#31 trace in that repo's README) to land on 0x15C0; treating it as
+    // unsigned -- the bug this project shipped with until 2026-08-01 -- silently
+    // gives 0x46E3 instead, and 0x46E33D53 is what this test used to assert.
+    //   transform(D9,1C,SEC1)=0x15C0  transform(0,0,SEC2)=0      -> r_msb=0x15C0
+    //   transform(0,0,SEC1)=0         transform(15,C0,SEC2)=0x35DD -> r_lsb=0x35DD
+    //   -> key = 0x15C035DD
     // If this ever changes, somebody broke the algorithm.
     uint32_t k = psa::seed_key::compute(0xD91C, 0x00000000);
-    assert(k == 0x46E33D53);
+    assert(k == 0x15C035DD);
     printf("  seed/key: known vector (D91C,00000000)=%08lX OK\n",
            static_cast<unsigned long>(k));
 }
@@ -1358,6 +1364,35 @@ static std::string captureStdout(void (*body)(psa::DiagShell&), psa::DiagShell& 
     return out;
 }
 
+static void test_pincrack() {
+    // Reference vectors generated with this project's own (now sign-extension-
+    // fixed) seed_key::transform, cross-checked against pypsadiag's
+    // PINExtractor.py PinExtractor for pin="TEST":
+    //   chal=12345678 -> resp=756F7AED (alone: 130 candidates, incl. TEST)
+    //   chal=CAFEBABE -> resp=715F3FE5 (both pairs together: {RESA, TEST})
+    psa::CanManager can;
+    psa::DiagShell shell;
+    shell.init(&can);
+
+    std::string out = captureStdout([](psa::DiagShell& sh) {
+        sh.feedCommandLine("pincrack 12345678 756F7AED CAFEBABE 715F3FE5");
+    }, shell);
+    assert(out.find("candidate: TEST") != std::string::npos);
+    assert(out.find("done, 2 candidate(s)") != std::string::npos);
+
+    // Malformed input (odd token, bad hex) is rejected before the search runs.
+    std::string bad1 = captureStdout([](psa::DiagShell& sh) {
+        sh.feedCommandLine("pincrack 12345678");
+    }, shell);
+    assert(bad1.find("Usage: pincrack") != std::string::npos);
+    std::string bad2 = captureStdout([](psa::DiagShell& sh) {
+        sh.feedCommandLine("pincrack ZZZZZZZZ 756F7AED");
+    }, shell);
+    assert(bad2.find("Bad hex token") != std::string::npos);
+
+    printf("  pincrack: 2-pair search finds TEST among 2 candidates, bad input rejected OK\n");
+}
+
 static void test_uds_framed_zone_on_kwp_ecu() {
     psa::CanManager can;
     psa::DiagShell shell;
@@ -1494,7 +1529,7 @@ static void test_read_only_mode_blocks_writes() {
     // `pdi` is absent on purpose: it only scans and reads DTCs.
     const char* writes[] = { "write 2A00 01", "clear", "trace", "actuator 3101",
                              "flash begin", "service reset", "program 01",
-                             "esp calib", "raw 2E 2A 00 01" };
+                             "esp calib", "raw 2E 2A 00 01", "ecodisable" };
     for (const char* w : writes) {
         psa::g_sent_frames.clear();
         shell.feedCommandLine(w);
@@ -1528,6 +1563,7 @@ int main() {
     test_diag_shell_state();
     test_seedkey_determinism();
     test_seedkey_known_vector();
+    test_pincrack();
     test_isotp_single_frame();
     test_isotp_multi_frame();
     test_ecu_table();

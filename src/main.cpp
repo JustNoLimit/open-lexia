@@ -107,8 +107,14 @@ void decode_sniffed(psa::Bus bus, const psa::CanFrame& f) {
         printf("[HS] 38D yaw_rate=%d\n",
                static_cast<int16_t>((f.data[0] << 8) | f.data[1]));
     } break;
-    case 0x072: printf("[HS] 072 immo_query\n"); break;
-    case 0x0A8: printf("[HS] 0A8 immo_response\n"); break;
+    // Immobiliser challenge/response — payload bytes [1..4] are the 32-bit value
+    // 'pincrack' needs (see 'help'); dumped raw here since there's nothing to decode.
+    case 0x072: if (f.dlc >= 5) {
+        printf("[HS] 072 immo_challenge: %02X%02X%02X%02X\n", f.data[1], f.data[2], f.data[3], f.data[4]);
+    } break;
+    case 0x0A8: if (f.dlc >= 5) {
+        printf("[HS] 0A8 immo_response: %02X%02X%02X%02X\n", f.data[1], f.data[2], f.data[3], f.data[4]);
+    } break;
     case 0x217: printf("[HS] 217 cluster_btn=%02X\n", f.data[0]); break;
 
     // ===== CAN-LS (125 kbps) =====

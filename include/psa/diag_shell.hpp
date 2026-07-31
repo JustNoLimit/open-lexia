@@ -96,6 +96,8 @@ private:
     void cmdHwtest();
     void cmdGuidedSniff(const char* arg);
     void cmdLidScan(const char* arg);
+    void cmdEcoDisable();
+    void cmdPincrack(const char* arg);
     void cmdHelp();
 
     // --- Internal helpers ---

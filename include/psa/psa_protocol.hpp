@@ -159,8 +159,18 @@ namespace seed_key {
 // The bitwise-OR combiner below is intentional and verified against the CIROCCO
 // firmware trace (docs/psa_can_reference.md §4.4); each transform() output stays
 // within 15 bits for any 16-bit input, so the OR never overflows int16_t.
+//
+// data must be SIGNED 16-bit before the divide (bug fix 2026-08-01): the CIROCCO
+// trace's SXTH/ASR#31 correction term only exists for signed division-by-constant,
+// and ludwig-v's own algorithm.c/algorithm.py both declare/cast this value to a
+// signed 16-bit type before dividing. Cross-checked bit-for-bit against
+// algorithm.py's get_key() over 2000+ random + edge-case (pin,seed) pairs.
+// Previously this used an always-unsigned `long`, which silently produced the
+// wrong key whenever a pin/seed byte pair had the high bit set (msb >= 0x80) --
+// roughly half of all inputs. That was never caught because unlock() has never
+// been run against a real ECU (see AGENTS.md §6).
 inline long transform(uint8_t msb, uint8_t lsb, const uint8_t sec[3]) {
-    long data = (static_cast<long>(msb) << 8) | lsb;
+    int16_t data = static_cast<int16_t>((static_cast<uint16_t>(msb) << 8) | lsb);
     long r = ((data % sec[0]) * sec[2]) - ((data / sec[0]) * sec[1]);
     if (r < 0) r += (sec[0] * sec[2]) + sec[1];
     return r;
